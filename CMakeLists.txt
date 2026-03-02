@@ -118,7 +118,7 @@ endif()
 # Define sources for project
 # ------------------------------------------------------------------------------
 add_subdirectory(src)
-
+add_subdirectory(alvine)
 # ------------------------------------------------------------------------------
 # Include testing related material (BUILD_TESTING is defined in CTest module)
 # ------------------------------------------------------------------------------

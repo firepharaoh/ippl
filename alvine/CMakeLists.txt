@@ -10,11 +10,13 @@ link_directories (
     ${Kokkos_DIR}/..
 )
 
+find_package(Heffte CONFIG REQUIRED)
 set (IPPL_LIBS ippl ${MPI_CXX_LIBRARIES})
 set (COMPILE_FLAGS ${OPAL_CXX_FLAGS})
 
 add_executable (VortexInCell VortexInCell.cpp)
-target_link_libraries (VortexInCell ${IPPL_LIBS})
+target_include_directories(VortexInCell PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
+target_link_libraries(VortexInCell ${IPPL_LIBS} Heffte::Heffte)
 
 # vi: set et ts=4 sw=4 sts=4:
 
