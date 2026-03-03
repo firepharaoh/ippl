@@ -4,10 +4,9 @@
 # configuration settings.
 spack:
   specs:
-  - cmake
   - openmpi
-  - kokkos +serial ~openmp ~cuda ~rocm cxxstd=20
-  - heffte ^mpi
+  - kokkos +serial +openmp ~cuda ~rocm cxxstd=20
+  - heffte ^openmpi
   concretizer:
     unify: true
   view: true
