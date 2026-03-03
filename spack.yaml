@@ -1,0 +1,23 @@
+# This is a Spack Environment file.
+#
+# It describes a set of packages to be installed, along with
+# configuration settings.
+spack:
+  specs:
+  - cmake
+  - openmpi
+  - kokkos +serial ~openmp ~cuda ~rocm cxxstd=20
+  - heffte ^mpi
+  concretizer:
+    unify: true
+  view: true
+  packages:
+    gcc:
+      externals:
+      - spec: gcc@13.3.0 languages:='c,c++,fortran'
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/gcc
+            cxx: /usr/bin/g++
+            fortran: /usr/bin/gfortran

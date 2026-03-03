@@ -1,24 +1,22 @@
+# Build directories
 build/
-doc/html
-doc/latex
-manual/*.aux
-manual/*.log
-manual/*.toc
-manual/*.idx
-manual/*.lof
-manual/*.lot
-manual/ippl_user_guide.pdf
-build*/
+cmake-build*/
+CMakeFiles/
+CMakeCache.txt
+*.cmake
+
+# Spack
+.spack-env/
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Editor / OS junk
 *~
-*.~
-*.orig
-
-# ignore build directories
-build*/
-
-# ignore .vscode directory
-.vscode
-.cache
-
-# mac
+*.swp
 .DS_Store
