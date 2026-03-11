@@ -103,7 +103,7 @@ public:
 
     }
 
-    void initializeParticles() {
+ /*   void initializeParticles() {
 
       std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
@@ -143,8 +143,68 @@ public:
       Kokkos::fence();
       ippl::Comm->barrier();
 
-    }
-  
+    }*/
+void initializeParticles() {
+
+
+    auto* mesh = &this->fcontainer_m->getMesh();
+    auto* FL   = &this->fcontainer_m->getFL();
+    std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
+
+    unsigned nxp = static_cast<unsigned>(std::sqrt(this->np_m));
+    unsigned nyp = this->np_m / nxp;
+    size_type totalP = nxp * nyp;
+
+    pc->create(totalP);
+
+    auto* R = &(pc->R.getView());
+    auto omega_host = pc->omega.getHostMirror();
+
+    double xmin = this->rmin_m[0];
+    double xmax = this->rmax_m[0];
+
+    double ymin = (this->rmin_m[1] + this->rmax_m[1]) / 2.0 - 1.0;
+    double ymax = (this->rmin_m[1] + this->rmax_m[1]) / 2.0 + 1.0;
+
+    double dxp = (xmax - xmin) / nxp;
+    double dyp = (ymax - ymin) / nyp;
+
+    int seed = 42;
+    Kokkos::Random_XorShift64_Pool<> rand_pool(seed + 100 * ippl::Comm->rank());
+
+    Kokkos::parallel_for(
+        "init_particle_positions",
+        totalP,
+        KOKKOS_LAMBDA(const int i) {
+            unsigned ix = i % nxp;
+            unsigned iy = i / nxp;
+
+            auto rand_gen = rand_pool.get_state();
+
+            double jitter_x = (rand_gen.drand() - 0.5) * dxp * 0.2;
+            double jitter_y = (rand_gen.drand() - 0.5) * dyp * 0.2;
+
+            rand_pool.free_state(rand_gen);
+
+            (*R)(i)[0] = xmin + (ix + 0.5) * dxp + jitter_x;
+            (*R)(i)[1] = ymin + (iy + 0.5) * dyp + jitter_y;
+        }
+    );
+
+    Kokkos::parallel_for(
+        "init_particle_vorticity",
+        totalP,
+        VortexDistribution(*R, omega_host,
+                           this->rmin_m, this->rmax_m,
+                           this->origin_m, totalP)
+    );
+
+    Kokkos::deep_copy(pc->omega.getView(), omega_host);
+
+    Kokkos::fence();
+    ippl::Comm->barrier();
+}
+
 
     void advance() override {
       LeapFrogStep();     
@@ -195,6 +255,58 @@ public:
       IpplTimings::stopTimer(updateTimer);
 
     }
+#include <fstream>
+#include <sstream>
+#include <memory>
+
+void dumpParticleDataPerRank() {
+    auto pc = this->pcontainer_m;
+
+    auto R_host = pc->R.getHostMirror();
+    auto omega_host = pc->omega.getHostMirror();
+
+    Kokkos::deep_copy(R_host, pc->R.getView());
+    Kokkos::deep_copy(omega_host, pc->omega.getView());
+
+    std::stringstream fname;
+    fname << "particles_rank_" << ippl::Comm->rank() << ".csv";
+
+    bool write_header = (this->it_m == 1);
+
+    std::ofstream csvout;
+    if (write_header) {
+        csvout.open(fname.str(), std::ios::out);
+    } else {
+        csvout.open(fname.str(), std::ios::app);
+    }
+
+    if constexpr (Dim == 2) {
+        if (write_header) {
+            csvout << "time,index,pos_x,pos_y,vorticity\n";
+        }
+
+        for (size_type i = 0; i < pc->getLocalNum(); i++) {
+            csvout << this->it_m << "," << i
+                   << "," << R_host(i)[0]
+                   << "," << R_host(i)[1]
+                   << "," << omega_host(i) << "\n";
+        }
+    } else {
+        if (write_header) {
+            csvout << "time,index,pos_x,pos_y,pos_z\n";
+        }
+
+        for (size_type i = 0; i < pc->getLocalNum(); i++) {
+            csvout << this->it_m << "," << i
+                   << "," << R_host(i)[0]
+                   << "," << R_host(i)[1]
+                   << "," << R_host(i)[2] << "\n";
+        }
+    }
+
+    csvout.close();
+    ippl::Comm->barrier();
+}
 
     void dump() override {
       static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("dump");
@@ -210,6 +322,7 @@ public:
         }
         csvout << "," << pc->omega(i) << endl;
       }
+      dumpParticleDataPerRank();
       IpplTimings::stopTimer(dumpTimer);
        
     }

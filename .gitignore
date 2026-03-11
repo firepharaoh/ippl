@@ -1,5 +1,6 @@
 # Build directories
 build/
+notebooks/
 cmake-build*/
 CMakeFiles/
 CMakeCache.txt
