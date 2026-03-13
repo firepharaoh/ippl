@@ -12,6 +12,8 @@ build*/
 *~
 *.~
 *.orig
+CMakeCache.txt
+DartConfiguration.tcl
 
 # ignore build directories
 build*/
