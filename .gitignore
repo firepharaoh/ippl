@@ -1,5 +1,15 @@
+# Build directories
 ippl-IPPL-1.0.0
 build/
+build_*/
+notebooks/
+cmake-build*/
+CMakeFiles/
+CMakeCache.txt
+*.cmake
+*.sh
+vic.*
+*.csv
 doc/html
 doc/latex
 manual/*.aux
@@ -9,7 +19,18 @@ manual/*.idx
 manual/*.lof
 manual/*.lot
 manual/ippl_user_guide.pdf
-build*/
+# Spack
+.spack-env/
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Editor / OS junk
 *~
 *.~
 *.orig
@@ -28,4 +49,5 @@ build*/
 cmake-build-*
 
 # mac
+*.swp
 .DS_Store

@@ -45,6 +45,7 @@ option(IPPL_ENABLE_UNIT_TESTS "Enable unit tests using GoogleTest" OFF)
 option(IPPL_ENABLE_FFT "Enable FFT support" OFF)
 option(IPPL_ENABLE_SOLVERS "Enable IPPL solvers" OFF)
 option(IPPL_ENABLE_ALPINE "Enable building the Alpine module" OFF)
+option(IPPL_ENABLE_ALVINE "Enable building the Alvine module" OFF)
 option(IPPL_ENABLE_COSMOLOGY "Enable building the Cosmology module" OFF)
 option(IPPL_ENABLE_EXAMPLES "Enable building the Example module" OFF)
 option(IPPL_ENABLE_TESTS "Build integration tests in test/ directory" OFF)
@@ -111,7 +112,6 @@ endif()
 # Define sources for project
 # ------------------------------------------------------------------------------
 add_subdirectory(src)
-
 # ------------------------------------------------------------------------------
 # Include testing related material (BUILD_TESTING is defined in CTest module)
 # ------------------------------------------------------------------------------
@@ -133,6 +133,10 @@ endif()
 # ------------------------------------------------------------------------------
 if(IPPL_ENABLE_ALPINE)
   add_subdirectory(alpine)
+endif()
+
+if(IPPL_ENABLE_ALVINE)
+  add_subdirectory(alvine)
 endif()
 
 if(IPPL_ENABLE_COSMOLOGY)
