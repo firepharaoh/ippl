@@ -11,12 +11,21 @@ namespace ippl {
     namespace detail {
         template <typename T, unsigned Dim>
         struct isExpression<Vector<T, Dim>> : std::true_type {};
+
+        template <typename T>
+        struct VectorTraits;
+
+        template <typename T, unsigned Dim>
+        struct VectorTraits<Vector<T, Dim>> {
+            using real_type               = T;
+            static constexpr unsigned dim = Dim;
+        };
     }  // namespace detail
 
     template <typename T, unsigned Dim>
     template <typename... Args, typename std::enable_if<sizeof...(Args) == Dim, bool>::type>
     KOKKOS_FUNCTION Vector<T, Dim>::Vector(const Args&... args)
-        : Vector({static_cast<T>(args)...}) {}
+        : data_m{static_cast<T>(args)...} {}
 
     template <typename T, unsigned Dim>
     template <typename E, size_t N>
@@ -34,7 +43,6 @@ namespace ippl {
 
     template <typename T, unsigned Dim>
     KOKKOS_FUNCTION Vector<T, Dim>::Vector(const std::initializer_list<T>& list) {
-        // PAssert(list.size() == Dim);
         unsigned int i = 0;
         for (auto& l : list) {
             data_m[i] = l;
@@ -189,9 +197,8 @@ namespace ippl {
 
     template <typename T, unsigned Dim>
     KOKKOS_INLINE_FUNCTION T Vector<T, Dim>::Pnorm(const int p) const {
-
         T val = 0.0;
-        for(unsigned i = 0; i < Dim; ++i) {
+        for (unsigned i = 0; i < Dim; ++i) {
             val += Kokkos::pow(Kokkos::abs(data_m[i]), p);
         }
 

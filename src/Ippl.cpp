@@ -9,6 +9,7 @@
 #include <cstring>
 #include <list>
 
+#include "Interpolation/Scatter/AutoTune.h"
 #include "Utility/IpplInfo.h"
 
 namespace ippl {
@@ -71,6 +72,14 @@ namespace ippl {
                     }
                     auto factor = detail::getNumericalOption<double>(argv[nargs]);
                     Comm->setDefaultOverallocation(factor);
+                } else if (detail::checkOption(argv[nargs], "--debug", "-g")) {
+                    ++nargs;
+                    if (Comm->rank() == 0) {
+                        std::cout << "Please attach debugger and hit return" << std::endl;
+                        char c;
+                        std::cin >> c;
+                    }
+                    Comm->barrier();
                 } else if (nargs > 0 && std::strstr(argv[nargs], "--kokkos") == nullptr) {
                     notparsed.push_back(argv[nargs]);
                 }
@@ -89,10 +98,15 @@ namespace ippl {
         }
 
         Kokkos::initialize(argc, argv);
+
+        // Seed scatter/gather caches with per-exec-space defaults and, when
+        // IPPL_AUTO_TUNE is set, run the sweep. See AutoTune.h.
+        ippl::Interpolation::AutoTune::initialize();
     }
 
     void finalize() {
         Comm->deleteAllBuffers();
+        ippl::detail::finalizeBinSortBuffers();
         Kokkos::finalize();
         // we must first delete the communicator and
         // afterwards the MPI environment

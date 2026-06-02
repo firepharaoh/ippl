@@ -77,14 +77,97 @@ TYPED_TEST(ParticleBaseTest, CreateAndDestroy) {
     Kokkos::deep_copy(invalid, mirror2);
     pbase->destroy(invalid, 500);
 
-    // Verify remaining indices
-    Kokkos::deep_copy(mirror, pbase->ID.getView());
+    // ParticleAttrib::getView() returns a subview restricted to the live
+    // particle range, so after destroy() the view is the new (smaller) size
+    // and we must re-acquire the host mirror to match the new extent.
+    auto liveMirror = pbase->ID.getHostMirror();
+    Kokkos::deep_copy(liveMirror, pbase->ID.getView());
+    ASSERT_EQ(liveMirror.extent(0), 500u);
     for (int i = 0; i < 500; ++i) {
         // The even indices contain the original particles
         // The particles with odd indices are deleted and replaced
         // with particles with even indices (in ascending order w.r.t. index)
         int index = i % 2 == 0 ? i : 500 + (i - 1);
-        EXPECT_EQ(mirror[i], index);
+        EXPECT_EQ(liveMirror[i], index);
+    }
+}
+
+TYPED_TEST(ParticleBaseTest, Alloc) {
+    if (ippl::Comm->size() > 1) {
+        std::cerr << "ParticleBaseTest::Alloc test only works on one MPI rank!" << std::endl;
+        return;
+    }
+    constexpr size_t nReserved = 1024;
+
+    auto& pbase = this->pbase;
+    pbase->alloc(nReserved);
+
+    EXPECT_EQ(size_t(0), pbase->getLocalNum());
+    EXPECT_GE(pbase->R.size(), nReserved);
+    EXPECT_GE(pbase->ID.size(), nReserved);
+}
+
+TYPED_TEST(ParticleBaseTest, CreatePreservesExistingData) {
+    if (ippl::Comm->size() > 1) {
+        std::cerr << "ParticleBaseTest::CreatePreservesExistingData test only works for one "
+                     "MPI rank!"
+                  << std::endl;
+        return;
+    }
+    constexpr size_t nFirst = 100;
+
+    auto& pbase = this->pbase;
+    pbase->create(nFirst);
+
+    // After the first create the capacity is nFirst * overalloc. Add enough particles
+    // in the second call to force a capacity grow regardless of overalloc factor.
+    const size_t capAfterFirst = pbase->ID.size();
+    const size_t nSecond       = capAfterFirst + 50;
+
+    pbase->create(nSecond, /*non_destructive=*/true);
+
+    EXPECT_EQ(nFirst + nSecond, pbase->getLocalNum());
+    EXPECT_GE(pbase->ID.size(), nFirst + nSecond);
+
+    // The first nFirst IDs should still be [0, nFirst). With nextID=0 and numNodes=1
+    // (single rank) that is what ParticleBase::create assigned in the first call.
+    auto mirror = pbase->ID.getHostMirror();
+    Kokkos::deep_copy(mirror, pbase->ID.getView());
+    for (size_t i = 0; i < nFirst; ++i) {
+        EXPECT_EQ(mirror[i], (int)i);
+    }
+}
+
+TYPED_TEST(ParticleBaseTest, AllocThenCreatePreserves) {
+    if (ippl::Comm->size() > 1) {
+        std::cerr << "ParticleBaseTest::AllocThenCreatePreserves test only works for one MPI "
+                     "rank!"
+                  << std::endl;
+        return;
+    }
+    constexpr size_t nFinal = 4096;
+    constexpr size_t nStep  = 256;
+
+    auto& pbase = this->pbase;
+    pbase->alloc(nFinal);
+
+    // Capture device pointers; they must stay stable while cumulative size <= nFinal.
+    const auto idDataBefore = pbase->ID.getView().data();
+    const auto rDataBefore  = pbase->R.getView().data();
+
+    for (size_t i = 0; i < nFinal / nStep; ++i) {
+        pbase->create(nStep, /*non_destructive=*/true);
+        EXPECT_EQ(pbase->ID.getView().data(), idDataBefore);
+        EXPECT_EQ(pbase->R.getView().data(), rDataBefore);
+    }
+
+    EXPECT_EQ(nFinal, pbase->getLocalNum());
+
+    // IDs in [0, nFinal) should be [0, nFinal) since nextID=0 and numNodes=1.
+    auto mirror = pbase->ID.getHostMirror();
+    Kokkos::deep_copy(mirror, pbase->ID.getView());
+    for (size_t i = 0; i < nFinal; ++i) {
+        EXPECT_EQ(mirror[i], (int)i);
     }
 }
 

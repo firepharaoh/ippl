@@ -57,7 +57,14 @@ namespace ippl {
 
             virtual std::string get_name() const = 0;
 
-            virtual void create(size_type) = 0;
+            // Allocate internal capacity for N particles. Does NOT touch the logical
+            // particle count (localNum_m on ParticleBase). Existing data is not preserved.
+            virtual void alloc(size_type) = 0;
+
+            // non_destructive=false (default) keeps the historical destructive-on-grow
+            // behavior (Kokkos::realloc). non_destructive=true uses Kokkos::resize so
+            // prior entries survive a capacity grow.
+            virtual void create(size_type, bool non_destructive = false) = 0;
 
             virtual void destroy(const hash_type&, const hash_type&, size_type) = 0;
             virtual size_type packedSize(const size_type) const                 = 0;
@@ -66,19 +73,26 @@ namespace ippl {
 
             virtual void unpack(size_type) = 0;
 
-            virtual void serialize(Archive<memory_space>& ar, size_type nsends) = 0;
-
+            //! Pack the first @p nsends entries into @p ar.
+            virtual void serialize(Archive<memory_space>& ar, size_type nsends)   = 0;
+            //! Pack the @p nsends entries indexed by @p hash into @p ar.
+            virtual void serialize(detail::Archive<memory_space>& ar, const hash_type& hash,
+                                   size_type nsends)                              = 0;
+            //! Unpack the first @p nrecvs entries from @p ar (legacy interface).
             virtual void deserialize(Archive<memory_space>& ar, size_type nrecvs) = 0;
+            //! Unpack @p nrecvs entries from @p ar starting at attribute @p offset.
+            virtual void deserialize(detail::Archive<memory_space>& ar, size_type offset,
+                                     size_type nrecvs)                            = 0;
 
             virtual size_type size() const = 0;
 
-            virtual ~ParticleAttribBase() = default;
+            KOKKOS_INLINE_FUNCTION virtual ~ParticleAttribBase() = default;
 
             void setParticleCount(size_type& num) { localNum_mp = &num; }
             size_type getParticleCount() const { return *localNum_mp; }
 
             virtual void applyPermutation(const hash_type&) = 0;
-            virtual void internalCopy(const hash_type&) = 0;
+            virtual void internalCopy(const hash_type&)     = 0;
 
         protected:
             const size_type* localNum_mp;
