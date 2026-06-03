@@ -1,6 +1,7 @@
 #ifndef IPPL_ALVINE_MANAGER_H
 #define IPPL_ALVINE_MANAGER_H
 
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 
@@ -151,7 +152,65 @@ public:
       }
     }
 
-  void spectralGather() {
+    void computeSpectralVelocityModes() {
+      if constexpr (Dim == 2) {
+        auto omega = omega_hat_m.getView();
+        auto ux    = ux_hat_m.getView();
+        auto uy    = uy_hat_m.getView();
+
+        auto& layout = omega_hat_m.getLayout();
+        auto& mesh   = omega_hat_m.get_mesh();
+
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = omega_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx   = dx[0] * Nx;
+        const T Ly   = dx[1] * Ny;
+        const T area = Lx * Ly;
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const Kokkos::complex<T> imag(0.0, 1.0);
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "compute_spectral_velocity_modes",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(omega.extent(0)) - nghost,
+                         static_cast<int>(omega.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+
+              const bool notMidX = (gx != Nx / 2);
+              const bool notMidY = (gy != Ny / 2);
+
+              const T kx = notMidX * twoPi * mx / Lx;
+              const T ky = notMidY * twoPi * my / Ly;
+              const T k2 = kx * kx + ky * ky;
+
+              if (k2 == T(0)) {
+                ux(i, j) = Kokkos::complex<T>(0.0, 0.0);
+                uy(i, j) = Kokkos::complex<T>(0.0, 0.0);
+              } else {
+                const auto psi = omega(i, j) / (area * k2);
+                ux(i, j) = -imag * ky * psi;
+                uy(i, j) =  imag * kx * psi;
+              }
+            });
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::computeSpectralVelocityModes is implemented for 2D VIC only");
+      }
+    }
+
+    void spectralGather() {
       if constexpr (Dim == 2) {
           if (!nufftType2_mp) {
               throw std::runtime_error("spectralGather called before initNUFFT");
@@ -177,8 +236,17 @@ public:
                   P(i)[0] = ux(i);
                   P(i)[1] = uy(i);
               });
+          Kokkos::fence();
+      } else {
+          throw std::runtime_error("AlvineManager::spectralGather is implemented for 2D VIC only");
       }
-  }
+    }
+
+    void spectralSolveParticles() {
+      spectralScatter();
+      computeSpectralVelocityModes();
+      spectralGather();
+    }
 
 
     void par2grid() override {

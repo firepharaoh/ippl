@@ -13,6 +13,8 @@ class ParticleContainer : public ippl::ParticleBase<ippl::ParticleSpatialLayout<
     public:
         typename Base::particle_position_type P;  
         vorticity_type omega;
+        ippl::ParticleAttrib<T> ux;
+        ippl::ParticleAttrib<T> uy;
         typename Base::particle_position_type R_old;
 
     private:
@@ -35,6 +37,8 @@ class ParticleContainer : public ippl::ParticleBase<ippl::ParticleSpatialLayout<
 
 		this->addAttribute(P);
         this->addAttribute(omega);
+        this->addAttribute(ux);
+        this->addAttribute(uy);
         this->addAttribute(R_old);
 	}
 	void setupBCs() { setBCAllPeriodic(); }
