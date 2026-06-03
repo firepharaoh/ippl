@@ -1,5 +1,5 @@
-#ifndef IPPL_VORTEX_IN_CELL_MANAGER_H
-#define IPPL_VORTEX_IN_CELL_MANAGER_H
+#ifndef IPPL_VORTEX_IN_FOURIER_MANAGER_H
+#define IPPL_VORTEX_IN_FOURIER_MANAGER_H
 
 #include <memory>
 
@@ -22,7 +22,7 @@ using host_type = typename ippl::ParticleAttrib<T>::host_mirror_type; /*using ho
 
 
 template <typename T, unsigned Dim, typename VortexDistribution>
-class VortexInCellManager : public AlvineManager<T, Dim> {
+class VortexInFourierManager : public AlvineManager<T, Dim> {
 public:
     using ParticleContainer_t = ParticleContainer<T, Dim>;
     using FieldContainer_t    = FieldContainer<T, Dim>;
@@ -32,7 +32,7 @@ public:
     Mesh_t<Dim> mesh_m;          // Store the mesh
 
     // Constructor declaration
-    VortexInCellManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, 
+    VortexInFourierManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, 
                         std::string& solver_, int dump_freq_,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
@@ -47,7 +47,7 @@ public:
         this->mesh_m = mesh_;      // Store the mesh
     }
 
-    ~VortexInCellManager() {}
+    ~VortexInFourierManager() {}
 
 void pre_run() override {
 
@@ -90,6 +90,8 @@ void pre_run() override {
         
       this->fcontainer_m->initializeFields();
 
+      // TODO(VIF): replace or bypass this grid FieldSolver once the Fourier/NUFFT solver owns
+      // omega_hat -> velocity_hat directly.
       this->setFieldSolver( std::make_shared<FieldSolver_t>( this->solver_m, &this->fcontainer_m->getOmegaField()) );
       
       this->fsolver_m->initSolver();
@@ -98,16 +100,22 @@ void pre_run() override {
 
       initializeParticles();
 
-      this->par2grid();
+      //initialize NUFFT plans here before using spectralScatter/spectralGather.
+      this->initNUFFT();
+      // replaced this initial CIC/grid solve with spectralSolveParticles().
+      this->spectralScatter();
       auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
 
-      this->fsolver_m->runSolver();
-      this->computeVelocityField();
+      // replace grid Poisson solve with omega_hat -> ux_hat/uy_hat.
+      this->computeSpectralVelocityModes();
+      //replace finite-difference grid velocity with spectral velocity modes.
+      //this->computeVelocityField();
       logEnergyDiagnostics();
       Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
       logEnstrophyDiagnostics();
       logDivergenceDiagnostics();
-      this->grid2par();
+      // replace CIC gather with type-2 NUFFT gather.
+      this->spectralGather();
 
       std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
@@ -324,25 +332,29 @@ void logDivergenceDiagnostics() {
       static IpplTimings::TimerRef RTimer           = IpplTimings::getTimer("pushPosition");
       static IpplTimings::TimerRef updateTimer      = IpplTimings::getTimer("update");
       static IpplTimings::TimerRef SolveTimer       = IpplTimings::getTimer("solve");
-      static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
-      static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("grid2par");
+      // TODO(VIF): rename timers once the timestep uses spectral scatter/gather.
+      static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
+      static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
       
       std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
       // scatter the vorticity to the underlying grid
+      // TODO(VIF): replace with spectralScatter().
       IpplTimings::startTimer(par2gridTimer);	
-      this->par2grid();
+      this->spectralScatter();
       IpplTimings::stopTimer(par2gridTimer);	
       auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
 
       // claculate stream function
+      // TODO(VIF): replace with computeSpectralVelocityModes().
       IpplTimings::startTimer(SolveTimer);
-      this->fsolver_m->runSolver();
+      this->computeSpectralVelocityModes();
       IpplTimings::stopTimer(SolveTimer);
 
       // calculate velocity from stream function
+      // TODO(VIF): remove finite-difference grid velocity when velocity is computed in Fourier space.
       IpplTimings::startTimer(PTimer);
-      this->computeVelocityField();
+      //this->computeVelocityField();
       logEnergyDiagnostics();
       Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
       logEnstrophyDiagnostics();
@@ -350,8 +362,9 @@ void logDivergenceDiagnostics() {
       IpplTimings::stopTimer(PTimer);
 
       // gather velocity field
+      // TODO(VIF): replace with spectralGather().
       IpplTimings::startTimer(grid2parTimer);	
-      this->grid2par();
+      this->spectralGather();
       IpplTimings::stopTimer(grid2parTimer);	
 
       //drift
@@ -425,13 +438,14 @@ void dumpParticleDataPerRank() {
       static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
       IpplTimings::startTimer(dumpTimer);
 
+      // TODO(VIF): update dumps to either reconstruct a diagnostic grid or dump spectral quantities.
       this->par2grid();
       auto omega_current = this->fcontainer_m->getOmegaField().deepCopy();
       this->fsolver_m->runSolver();
       this->computeVelocityField();
       Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_current.getView());
 
-      alvine::vtk::writeScalarField2D("data/VortexInCell", "omega",
+      alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
                                       this->fcontainer_m->getOmegaField(),
                                       this->rmin_m, this->hr_m, this->it_m);
 
@@ -439,8 +453,9 @@ void dumpParticleDataPerRank() {
     }
 
     void logOmegaField() {
+      // TODO(VIF): update logging once omega is primarily represented as omega_hat.
       this->par2grid();
-      alvine::vtk::writeScalarFieldCsv2D("data/VortexInCell/omega_csv", "omega",
+      alvine::vtk::writeScalarFieldCsv2D("data/VortexInFourier/omega_csv", "omega",
                                          this->fcontainer_m->getOmegaField(), this->rmin_m,
                                          this->hr_m, this->it_m);
     }
