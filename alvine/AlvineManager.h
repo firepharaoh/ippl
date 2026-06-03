@@ -2,6 +2,7 @@
 #define IPPL_ALVINE_MANAGER_H
 
 #include <memory>
+#include <stdexcept>
 
 #include "FieldContainer.hpp"
 #include "FieldSolver.hpp"
@@ -13,6 +14,7 @@
 #include "Random/InverseTransformSampling.h"
 #include "Random/NormalDistribution.h"
 #include "Random/Randn.h"
+#include "FFT/Transform/Transform.h"
 
 using view_type = typename ippl::detail::ViewType<ippl::Vector<double, Dim>, 1>::view_type;
 
@@ -26,6 +28,17 @@ public:
     using FieldSolver_t= FieldSolver<T, Dim>;
     using LoadBalancer_t= LoadBalancer<T, Dim>;
     using Base= ippl::ParticleBase<ippl::ParticleSpatialLayout<T, Dim>>;
+    using RealField_t = Field<T, Dim>;
+    using Nufft_t = ippl::FFT<ippl::NUFFTransform, RealField_t>;
+    using ComplexField_t = typename Nufft_t::ComplexField;
+
+    std::shared_ptr<Nufft_t> nufftType1_mp;
+    std::shared_ptr<Nufft_t> nufftType2_mp;
+
+    ComplexField_t omega_hat_m;
+    ComplexField_t ux_hat_m;
+    ComplexField_t uy_hat_m;
+
 
 protected:
     unsigned nt_m;
@@ -85,6 +98,33 @@ public:
       }
       m << this->it_m << " Done" << endl;
     }
+    void initNUFFT(double tol = 1e-10) {
+      ippl::ParameterList p1, p2;
+
+      p1.add("tolerance", tol);
+      p2.add("tolerance", tol);
+
+      // 2D currently uses native NUFFT path. FINUFFT path is 3D-only here.
+      p1.add("use_finufft", false);
+      p2.add("use_finufft", false);
+      p1.add("use_upsampled_inputs", false);
+      p2.add("use_upsampled_inputs", false);
+      p1.add("spread_method", "tiled");
+      p2.add("gather_method", "atomic_sort");
+
+      auto& FL = this->fcontainer_m->getFL();
+      auto& mesh = this->fcontainer_m->getMesh();
+
+      omega_hat_m.initialize(mesh, FL);
+      ux_hat_m.initialize(mesh, FL);
+      uy_hat_m.initialize(mesh, FL);
+
+      nufftType1_mp = std::make_shared<Nufft_t>(
+          FL, this->pcontainer_m->getLocalNum(), 1, p1);
+
+      nufftType2_mp = std::make_shared<Nufft_t>(
+          FL, this->pcontainer_m->getLocalNum(), 2, p2);
+    }
 
     void grid2par() override { 
 	gatherCIC(); 
@@ -94,6 +134,52 @@ public:
       this->pcontainer_m->P = 0.0;
       gather(this->pcontainer_m->P, this->fcontainer_m->getUField(), this->pcontainer_m->R);
     }
+
+    void spectralScatter() {
+      if constexpr (Dim == 2) {
+        if (!nufftType1_mp) {
+          throw std::runtime_error("AlvineManager::spectralScatter called before initNUFFT");
+        }
+
+        omega_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        nufftType1_mp->transform(
+            this->pcontainer_m->R,
+            this->pcontainer_m->omega,
+            omega_hat_m);
+      } else {
+        throw std::runtime_error("AlvineManager::spectralScatter is implemented for 2D VIC only");
+      }
+    }
+
+  void spectralGather() {
+      if constexpr (Dim == 2) {
+          if (!nufftType2_mp) {
+              throw std::runtime_error("spectralGather called before initNUFFT");
+          }
+
+          auto& pc = *this->pcontainer_m;
+
+          pc.ux = 0.0;
+          pc.uy = 0.0;
+
+          nufftType2_mp->transform(pc.R, pc.ux, ux_hat_m);
+          nufftType2_mp->transform(pc.R, pc.uy, uy_hat_m);
+
+          auto P = pc.P.getView();
+          auto ux = pc.ux.getView();
+          auto uy = pc.uy.getView();
+          const auto n = pc.getLocalNum();
+
+          Kokkos::parallel_for(
+              "pack_spectral_velocity",
+              n,
+              KOKKOS_LAMBDA(const size_t i) {
+                  P(i)[0] = ux(i);
+                  P(i)[1] = uy(i);
+              });
+      }
+  }
+
 
     void par2grid() override {
 	scatterCIC(); 

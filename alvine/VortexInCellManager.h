@@ -97,6 +97,7 @@ void pre_run() override {
       //this->setLoadBalancer( std::make_shared<LoadBalancer_t>( this->lbt_m, this->fcontainer_m, this->pcontainer_m, this->fsolver_m) );
 
       initializeParticles();
+      this->initNUFFT();
 
       this->par2grid();
       auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
