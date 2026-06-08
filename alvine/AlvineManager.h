@@ -136,117 +136,6 @@ public:
       gather(this->pcontainer_m->P, this->fcontainer_m->getUField(), this->pcontainer_m->R);
     }
 
-    void spectralScatter() {
-      if constexpr (Dim == 2) {
-        if (!nufftType1_mp) {
-          throw std::runtime_error("AlvineManager::spectralScatter called before initNUFFT");
-        }
-
-        omega_hat_m = Kokkos::complex<T>(0.0, 0.0);
-        nufftType1_mp->transform(
-            this->pcontainer_m->R,
-            this->pcontainer_m->omega,
-            omega_hat_m);
-      } else {
-        throw std::runtime_error("AlvineManager::spectralScatter is implemented for 2D VIC only");
-      }
-    }
-
-    void computeSpectralVelocityModes() {
-      if constexpr (Dim == 2) {
-        auto omega = omega_hat_m.getView();
-        auto ux    = ux_hat_m.getView();
-        auto uy    = uy_hat_m.getView();
-
-        auto& layout = omega_hat_m.getLayout();
-        auto& mesh   = omega_hat_m.get_mesh();
-
-        const auto& lDom   = layout.getLocalNDIndex();
-        const auto& domain = layout.getDomain();
-        const auto& dx     = mesh.getMeshSpacing();
-        const int nghost   = omega_hat_m.getNghost();
-
-        const int Nx = domain[0].length();
-        const int Ny = domain[1].length();
-        const T Lx   = dx[0] * Nx;
-        const T Ly   = dx[1] * Ny;
-        const T area = Lx * Ly;
-
-        const T twoPi = T(2.0 * std::acos(-1.0));
-        const Kokkos::complex<T> imag(0.0, 1.0);
-
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-        Kokkos::parallel_for(
-            "compute_spectral_velocity_modes",
-            policy_type({nghost, nghost},
-                        {static_cast<int>(omega.extent(0)) - nghost,
-                         static_cast<int>(omega.extent(1)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j) {
-              const int gx = i - nghost + lDom[0].first();
-              const int gy = j - nghost + lDom[1].first();
-
-              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-
-              const bool notMidX = (gx != Nx / 2);
-              const bool notMidY = (gy != Ny / 2);
-
-              const T kx = notMidX * twoPi * mx / Lx;
-              const T ky = notMidY * twoPi * my / Ly;
-              const T k2 = kx * kx + ky * ky;
-
-              if (k2 == T(0)) {
-                ux(i, j) = Kokkos::complex<T>(0.0, 0.0);
-                uy(i, j) = Kokkos::complex<T>(0.0, 0.0);
-              } else {
-                const auto psi = omega(i, j) / (area * k2);
-                ux(i, j) = imag * ky * psi;
-                uy(i, j) = -imag * kx * psi;
-              }
-            });
-      } else {
-        throw std::runtime_error(
-            "AlvineManager::computeSpectralVelocityModes is implemented for 2D VIC only");
-      }
-    }
-
-    void spectralGather() {
-      if constexpr (Dim == 2) {
-          if (!nufftType2_mp) {
-              throw std::runtime_error("spectralGather called before initNUFFT");
-          }
-
-          auto& pc = *this->pcontainer_m;
-
-          pc.ux = 0.0;
-          pc.uy = 0.0;
-
-          nufftType2_mp->transform(pc.R, pc.ux, ux_hat_m);
-          nufftType2_mp->transform(pc.R, pc.uy, uy_hat_m);
-
-          auto P = pc.P.getView();
-          auto ux = pc.ux.getView();
-          auto uy = pc.uy.getView();
-          const auto n = pc.getLocalNum();
-
-          Kokkos::parallel_for(
-              "pack_spectral_velocity",
-              n,
-              KOKKOS_LAMBDA(const size_t i) {
-                  P(i)[0] = ux(i);
-                  P(i)[1] = uy(i);
-              });
-          Kokkos::fence();
-      } else {
-          throw std::runtime_error("AlvineManager::spectralGather is implemented for 2D VIC only");
-      }
-    }
-
-    void spectralSolveParticles() {
-      spectralScatter();
-      computeSpectralVelocityModes();
-      spectralGather();
-    }
 
 
     void par2grid() override {
@@ -459,6 +348,268 @@ void scatterCIC() {
 
     } else if constexpr (Dim == 3) {
         // TODO 3D version
+    }
+}
+// ------------------------------------------------------------------------------ SPECTRAL IMPLEMENTATION ------------------------------------------------------------------------------
+    void spectralScatter() {
+      if constexpr (Dim == 2) {
+        if (!nufftType1_mp) {
+          throw std::runtime_error("AlvineManager::spectralScatter called before initNUFFT");
+        }
+
+        omega_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        nufftType1_mp->transform(
+            this->pcontainer_m->R,
+            this->pcontainer_m->omega,
+            omega_hat_m);
+      } else {
+        throw std::runtime_error("AlvineManager::spectralScatter is implemented for 2D VIC only");
+      }
+    }
+
+    void computeSpectralVelocityModes() {
+      if constexpr (Dim == 2) {
+        auto omega = omega_hat_m.getView();
+        auto ux    = ux_hat_m.getView();
+        auto uy    = uy_hat_m.getView();
+
+        auto& layout = omega_hat_m.getLayout();
+        auto& mesh   = omega_hat_m.get_mesh();
+
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = omega_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx   = dx[0] * Nx;
+        const T Ly   = dx[1] * Ny;
+        const T area = Lx * Ly;
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const Kokkos::complex<T> imag(0.0, 1.0);
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "compute_spectral_velocity_modes",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(omega.extent(0)) - nghost,
+                         static_cast<int>(omega.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+
+              const bool notMidX = (gx != Nx / 2);
+              const bool notMidY = (gy != Ny / 2);
+
+              const T kx = notMidX * twoPi * mx / Lx;
+              const T ky = notMidY * twoPi * my / Ly;
+              const T k2 = kx * kx + ky * ky;
+
+              if (k2 == T(0)) {
+                ux(i, j) = Kokkos::complex<T>(0.0, 0.0);
+                uy(i, j) = Kokkos::complex<T>(0.0, 0.0);
+              } else {
+                const auto psi = omega(i, j) / (area * k2);
+                ux(i, j) = imag * ky * psi;
+                uy(i, j) = -imag * kx * psi;
+              }
+            });
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::computeSpectralVelocityModes is implemented for 2D VIC only");
+      }
+    }
+
+    void spectralGather() {
+      if constexpr (Dim == 2) {
+          if (!nufftType2_mp) {
+              throw std::runtime_error("spectralGather called before initNUFFT");
+          }
+
+          auto& pc = *this->pcontainer_m;
+
+          pc.ux = 0.0;
+          pc.uy = 0.0;
+
+          nufftType2_mp->transform(pc.R, pc.ux, ux_hat_m);
+          nufftType2_mp->transform(pc.R, pc.uy, uy_hat_m);
+
+          auto P = pc.P.getView();
+          auto ux = pc.ux.getView();
+          auto uy = pc.uy.getView();
+          const auto n = pc.getLocalNum();
+
+          Kokkos::parallel_for(
+              "pack_spectral_velocity",
+              n,
+              KOKKOS_LAMBDA(const size_t i) {
+                  P(i)[0] = ux(i);
+                  P(i)[1] = uy(i);
+              });
+          Kokkos::fence();
+      } else {
+          throw std::runtime_error("AlvineManager::spectralGather is implemented for 2D VIC only");
+      }
+    }
+
+    void spectralSolveParticles() {
+      spectralScatter();
+      computeSpectralVelocityModes();
+      spectralGather();
+    }
+
+double computeSpectralDivergenceL2() {
+    if constexpr (Dim == 2) {
+        auto ux = ux_hat_m.getView();
+        auto uy = uy_hat_m.getView();
+
+        auto& layout = ux_hat_m.getLayout();
+        auto& mesh   = ux_hat_m.get_mesh();
+
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = ux_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx   = dx[0] * Nx;
+        const T Ly   = dx[1] * Ny;
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const Kokkos::complex<T> imag(0.0, 1.0);
+
+        double localDiv2 = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_reduce(
+            "compute_spectral_divergence_l2",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(ux.extent(0)) - nghost,
+                         static_cast<int>(ux.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, double& lsum) {
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+
+              const bool notMidX = (gx != Nx / 2);
+              const bool notMidY = (gy != Ny / 2);
+
+              const T kx = notMidX * twoPi * mx / Lx;
+              const T ky = notMidY * twoPi * my / Ly;
+
+              const auto divHat = imag * (kx * ux(i, j) + ky * uy(i, j));
+              lsum += divHat.real() * divHat.real() + divHat.imag() * divHat.imag();
+            },
+            localDiv2);
+
+        double globalDiv2 = 0.0;
+        ippl::Comm->reduce(localDiv2, globalDiv2, 1, std::plus<double>());
+
+        const double N = static_cast<double>(Nx) * static_cast<double>(Ny);
+        return std::sqrt(globalDiv2 / N);
+    } else {
+        throw std::runtime_error(
+            "AlvineManager::computeSpectralDivergenceL2 is implemented for 2D VIC only");
+    }
+}
+double computeSpectralEnergy() {
+    if constexpr (Dim == 2) {
+        auto ux = ux_hat_m.getView();
+        auto uy = uy_hat_m.getView();
+
+        auto& layout       = ux_hat_m.getLayout();
+        auto& mesh         = ux_hat_m.get_mesh();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = ux_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx   = dx[0] * Nx;
+        const T Ly   = dx[1] * Ny;
+        const T area = Lx * Ly;
+
+        double localEnergy = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_reduce(
+            "compute_spectral_energy",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(ux.extent(0)) - nghost,
+                         static_cast<int>(ux.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, double& lsum) {
+              const auto uxMode = ux(i, j);
+              const auto uyMode = uy(i, j);
+
+              const double ux2 =
+                  uxMode.real() * uxMode.real() + uxMode.imag() * uxMode.imag();
+              const double uy2 =
+                  uyMode.real() * uyMode.real() + uyMode.imag() * uyMode.imag();
+
+              lsum += 0.5 * (ux2 + uy2);
+            },
+            localEnergy);
+
+        double globalEnergy = 0.0;
+        ippl::Comm->allreduce(localEnergy, globalEnergy, 1, std::plus<double>());
+
+        // ux_hat_m and uy_hat_m are Fourier-series coefficients because
+        // computeSpectralVelocityModes divides the raw type-1 NUFFT modes by
+        // the domain area. Parseval therefore contributes one factor of area.
+        return area * globalEnergy;
+    } else {
+        throw std::runtime_error(
+            "AlvineManager::computeSpectralEnergy is implemented for 2D VIC only");
+    }
+}
+double computeSpectralEnstrophy() {
+    if constexpr (Dim == 2) {
+        auto omega = omega_hat_m.getView();
+
+        auto& layout       = omega_hat_m.getLayout();
+        auto& mesh         = omega_hat_m.get_mesh();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = omega_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx   = dx[0] * Nx;
+        const T Ly   = dx[1] * Ny;
+        const T area = Lx * Ly;
+
+        double localEnstrophy = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_reduce(
+            "compute_spectral_enstrophy",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(omega.extent(0)) - nghost,
+                         static_cast<int>(omega.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, double& lsum) {
+              const auto omegaMode = omega(i, j);
+              const double omega2 =
+                  omegaMode.real() * omegaMode.real()
+                  + omegaMode.imag() * omegaMode.imag();
+              lsum += 0.5 * omega2;
+            },
+            localEnstrophy);
+
+        double globalEnstrophy = 0.0;
+        ippl::Comm->allreduce(localEnstrophy, globalEnstrophy, 1, std::plus<double>());
+
+        // omega_hat_m contains the raw type-1 NUFFT sum. Dividing by the
+        // domain area gives Fourier-series coefficients, so Parseval yields
+        // one inverse factor of area for enstrophy.
+        return globalEnstrophy / area;
+    } else {
+        throw std::runtime_error(
+            "AlvineManager::computeSpectralEnstrophy is implemented for 2D VIC only");
     }
 }
 };

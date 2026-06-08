@@ -230,14 +230,14 @@ Kokkos::parallel_for(
 }
 
 void logEnergyDiagnostics() {
-    double energy = this->computeKineticEnergy();
+    double energy = this->computeSpectralEnergy();
 
     if (!this->energy_initialized_m) {
         this->energy0_m = energy;
         this->energy_initialized_m = true;
 
         if (ippl::Comm->rank() == 0) {
-            std::ofstream out("energy.csv", std::ios::out);
+            std::ofstream out("spectral_energy.csv", std::ios::out);
             out << "step,time,energy,rel_error,normalized_energy\n";
             out.close();
         }
@@ -249,12 +249,12 @@ void logEnergyDiagnostics() {
         energy / (std::fabs(this->energy0_m) > 1e-30 ? this->energy0_m : 1e-30);
 
     if (ippl::Comm->rank() == 0) {
-        Inform m("energy ");
+        Inform m("spectral energy ");
         m << "kinetic energy = " << energy
           << ", relError = " << relErr
           << ", normalizedEnergy = " << normalizedEnergy << endl;
 
-        std::ofstream out("energy.csv", std::ios::app);
+        std::ofstream out("spectral_energy.csv", std::ios::app);
         out.precision(16);
         out.setf(std::ios::scientific, std::ios::floatfield);
         out << this->it_m << ","
@@ -267,14 +267,14 @@ void logEnergyDiagnostics() {
 }
 
 void logEnstrophyDiagnostics() {
-    double enstrophy = this->computeEnstrophy();
+    double enstrophy = this->computeSpectralEnstrophy();
 
     if (!this->enstrophy_initialized_m) {
         this->enstrophy0_m = enstrophy;
         this->enstrophy_initialized_m = true;
 
         if (ippl::Comm->rank() == 0) {
-            std::ofstream out("enstrophy.csv", std::ios::out);
+            std::ofstream out("spectral_enstrophy.csv", std::ios::out);
             out << "step,time,enstrophy,rel_error\n";
             out.close();
         }
@@ -284,11 +284,11 @@ void logEnstrophyDiagnostics() {
     double relErr = this->relativeError(enstrophy, this->enstrophy0_m);
 
     if (ippl::Comm->rank() == 0) {
-        Inform m("enstrophy ");
+        Inform m("spectral enstrophy ");
         m << "enstrophy = " << enstrophy
           << ", relError = " << relErr << endl;
 
-        std::ofstream out("enstrophy.csv", std::ios::app);
+        std::ofstream out("spectral_enstrophy.csv", std::ios::app);
         out.precision(16);
         out.setf(std::ios::scientific, std::ios::floatfield);
         out << this->it_m << ","
@@ -301,13 +301,13 @@ void logEnstrophyDiagnostics() {
 
 
 void logDivergenceDiagnostics() {
-    double divL2 = this->computeDivergenceL2();
+    double divL2 = this->computeSpectralDivergenceL2();
 
     if (ippl::Comm->rank() == 0) {
-        Inform m("divergence ");
+        Inform m("spectral divergence ");
         m << "L2 = " << divL2 << endl;
 
-        std::ofstream out("divergence.csv", std::ios::app);
+        std::ofstream out("spectral_divergence.csv", std::ios::app);
 
         if (this->it_m == 0) {
             out << "step,time,div_l2\n";
