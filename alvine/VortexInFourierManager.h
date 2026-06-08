@@ -100,28 +100,12 @@ void pre_run() override {
 
       initializeParticles();
 
-      //initialize NUFFT plans here before using spectralScatter/spectralGather.
+      // Initialize the NUFFT plans. The first solve and leapfrog bootstrap are
+      // performed by the first call to advance(), while time_m is still zero.
       this->initNUFFT();
-      // replaced this initial CIC/grid solve with spectralSolveParticles().
-      this->spectralScatter();
-      auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
-
-      // replace grid Poisson solve with omega_hat -> ux_hat/uy_hat.
-      this->computeSpectralVelocityModes();
-      //replace finite-difference grid velocity with spectral velocity modes.
-      //this->computeVelocityField();
-      logEnergyDiagnostics();
-      Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
-      logEnstrophyDiagnostics();
-      logDivergenceDiagnostics();
-      // replace CIC gather with type-2 NUFFT gather.
-      this->spectralGather();
 
       std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
-
       pc->R_old = pc->R;
-      pc->R = pc->R_old + pc->P * this->dt_m;
-      pc->update();
 
     }
 
@@ -369,10 +353,17 @@ void logDivergenceDiagnostics() {
 
       //drift
       IpplTimings::startTimer(RTimer);
-      typename ippl::ParticleBase<ippl::ParticleSpatialLayout<T, Dim>>::particle_position_type R_old_temp = pc->R_old;
+      if (this->it_m == 0) {
+        // Bootstrap leapfrog with one forward-Euler position update.
+        pc->R_old = pc->R;
+        pc->R = pc->R + pc->P * this->dt_m;
+      } else {
+        typename ippl::ParticleBase<
+            ippl::ParticleSpatialLayout<T, Dim>>::particle_position_type R_old_temp = pc->R_old;
 
-      pc->R_old = pc->R;
-      pc->R = R_old_temp + 2 * pc->P * this->dt_m;
+        pc->R_old = pc->R;
+        pc->R = R_old_temp + 2 * pc->P * this->dt_m;
+      }
       IpplTimings::stopTimer(RTimer);
 
 
