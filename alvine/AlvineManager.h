@@ -415,8 +415,8 @@ void scatterCIC() {
                 uy(i, j) = Kokkos::complex<T>(0.0, 0.0);
               } else {
                 const auto psi = omega(i, j) / (area * k2);
-                ux(i, j) = imag * ky * psi;
-                uy(i, j) = -imag * kx * psi;
+                ux(i, j) = -imag * ky * psi;
+                uy(i, j) = imag * kx * psi;
               }
             });
       } else {
