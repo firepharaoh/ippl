@@ -1,6 +1,7 @@
 #ifndef IPPL_ALVINE_MANAGER_H
 #define IPPL_ALVINE_MANAGER_H
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -74,6 +75,7 @@ protected:
     bool energy_initialized_m = false;
     double enstrophy0_m = 0.0;
     bool enstrophy_initialized_m = false;
+    T spectralFilterWidth_m = T(-1);
 public:
 
     double getTime() { return time_m; }
@@ -83,6 +85,15 @@ public:
     int getNt() const { return nt_m; }
 
     void setNt(int nt_) { nt_m = nt_; }
+
+    void setSpectralFilterWidth(T width) {
+      if (width < T(0)) {
+        throw std::invalid_argument("Spectral filter width must be non-negative");
+      }
+      spectralFilterWidth_m = width;
+    }
+
+    T getSpectralFilterWidth() const { return spectralFilterWidth_m; }
 
     virtual void dump() { /* default does nothing */ };
 
@@ -115,6 +126,14 @@ public:
 
       auto& FL = this->fcontainer_m->getFL();
       auto& mesh = this->fcontainer_m->getMesh();
+      const auto& dx = mesh.getMeshSpacing();
+
+      if (spectralFilterWidth_m < T(0)) {
+        spectralFilterWidth_m = dx[0];
+        for (unsigned d = 1; d < Dim; ++d) {
+          spectralFilterWidth_m = std::max(spectralFilterWidth_m, dx[d]);
+        }
+      }
 
       omega_hat_m.initialize(mesh, FL);
       ux_hat_m.initialize(mesh, FL);
@@ -386,6 +405,7 @@ void scatterCIC() {
         const T Lx   = dx[0] * Nx;
         const T Ly   = dx[1] * Ny;
         const T area = Lx * Ly;
+        const T filterWidth = spectralFilterWidth_m;
 
         const T twoPi = T(2.0 * std::acos(-1.0));
         const Kokkos::complex<T> imag(0.0, 1.0);
@@ -406,17 +426,21 @@ void scatterCIC() {
               const bool notMidX = (gx != Nx / 2);
               const bool notMidY = (gy != Ny / 2);
 
-              const T kx = notMidX * twoPi * mx / Lx;
-              const T ky = notMidY * twoPi * my / Ly;
-              const T k2 = kx * kx + ky * ky;
+              const T laplaceKx = twoPi * mx / Lx;
+              const T laplaceKy = twoPi * my / Ly;
+              const T k2 = laplaceKx * laplaceKx + laplaceKy * laplaceKy;
+              const T derivativeKx = notMidX * laplaceKx;
+              const T derivativeKy = notMidY * laplaceKy;
 
               if (k2 == T(0)) {
                 ux(i, j) = Kokkos::complex<T>(0.0, 0.0);
                 uy(i, j) = Kokkos::complex<T>(0.0, 0.0);
               } else {
-                const auto psi = omega(i, j) / (area * k2);
-                ux(i, j) = -imag * ky * psi;
-                uy(i, j) = imag * kx * psi;
+                const T filter =
+                    Kokkos::exp(T(-0.5) * filterWidth * filterWidth * k2);
+                const auto psi = filter * omega(i, j) / (area * k2);
+                ux(i, j) = -imag * derivativeKy * psi;
+                uy(i, j) = imag * derivativeKx * psi;
               }
             });
       } else {
@@ -574,6 +598,7 @@ double computeSpectralEnstrophy() {
 
         auto& layout       = omega_hat_m.getLayout();
         auto& mesh         = omega_hat_m.get_mesh();
+        const auto& lDom   = layout.getLocalNDIndex();
         const auto& domain = layout.getDomain();
         const auto& dx     = mesh.getMeshSpacing();
         const int nghost   = omega_hat_m.getNghost();
@@ -583,6 +608,8 @@ double computeSpectralEnstrophy() {
         const T Lx   = dx[0] * Nx;
         const T Ly   = dx[1] * Ny;
         const T area = Lx * Ly;
+        const T filterWidth = spectralFilterWidth_m;
+        const T twoPi = T(2.0 * std::acos(-1.0));
 
         double localEnstrophy = 0.0;
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
@@ -592,7 +619,19 @@ double computeSpectralEnstrophy() {
                         {static_cast<int>(omega.extent(0)) - nghost,
                          static_cast<int>(omega.extent(1)) - nghost}),
             KOKKOS_LAMBDA(const int i, const int j, double& lsum) {
-              const auto omegaMode = omega(i, j);
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+
+              const T kx = twoPi * mx / Lx;
+              const T ky = twoPi * my / Ly;
+              const T k2 = kx * kx + ky * ky;
+              const T filter =
+                  Kokkos::exp(T(-0.5) * filterWidth * filterWidth * k2);
+
+              const auto omegaMode = filter * omega(i, j);
               const double omega2 =
                   omegaMode.real() * omegaMode.real()
                   + omegaMode.imag() * omegaMode.imag();
@@ -603,9 +642,8 @@ double computeSpectralEnstrophy() {
         double globalEnstrophy = 0.0;
         ippl::Comm->allreduce(localEnstrophy, globalEnstrophy, 1, std::plus<double>());
 
-        // omega_hat_m contains the raw type-1 NUFFT sum. Dividing by the
-        // domain area gives Fourier-series coefficients, so Parseval yields
-        // one inverse factor of area for enstrophy.
+        // Apply the same vortex-blob filter used by the velocity solve.
+        // Dividing raw type-1 modes by area gives Fourier-series coefficients.
         return globalEnstrophy / area;
     } else {
         throw std::runtime_error(
