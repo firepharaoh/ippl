@@ -521,19 +521,11 @@ void dumpParticleDataPerRank() {
       // dump() runs after the particle push, so refresh the modes to make the
       // reconstructed fields consistent with the particle positions and step.
       this->spectralScatter();
-      this->computeSpectralVelocityModes();
-      this->reconstructSpectralFields(
-          this->fcontainer_m->getOmegaField(),
-          this->fcontainer_m->getUField());
+      this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
 
       alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
                                       this->fcontainer_m->getOmegaField(),
                                       this->rmin_m, this->hr_m, this->it_m);
-      alvine::vtk::writeVectorField2D("data/VortexInFourier", "velocity",
-                                      this->fcontainer_m->getUField(),
-                                      this->rmin_m, this->hr_m, this->it_m);
-      alvine::vtk::writeParticles2D("data/VortexInFourier", "particles",
-                                    *this->pcontainer_m, this->it_m);
 
       IpplTimings::stopTimer(dumpTimer);
     }

@@ -480,16 +480,14 @@ void scatterCIC() {
       spectralGather();
     }
 
-    void reconstructSpectralFields(RealField_t& omegaField, VField_t<T, Dim>& velocityField) {
+    void reconstructSpectralVorticity(RealField_t& omegaField) {
       if constexpr (Dim == 2) {
         if (!spectralFft_mp) {
           throw std::runtime_error(
-              "AlvineManager::reconstructSpectralFields called before initNUFFT");
+              "AlvineManager::reconstructSpectralVorticity called before initNUFFT");
         }
 
         auto omegaModes = omega_hat_m.deepCopy();
-        auto uxModes    = ux_hat_m.deepCopy();
-        auto uyModes    = uy_hat_m.deepCopy();
 
         const auto& domain = omega_hat_m.getLayout().getDomain();
         const auto& dx     = omega_hat_m.get_mesh().getMeshSpacing();
@@ -499,31 +497,24 @@ void scatterCIC() {
         omegaModes = omegaModes / area;
 
         spectralFft_mp->transform(ippl::BACKWARD, omegaModes);
-        spectralFft_mp->transform(ippl::BACKWARD, uxModes);
-        spectralFft_mp->transform(ippl::BACKWARD, uyModes);
 
         auto omegaOut = omegaField.getView();
-        auto velocityOut = velocityField.getView();
         auto omegaGrid = omegaModes.getView();
-        auto uxGrid = uxModes.getView();
-        auto uyGrid = uyModes.getView();
         const int nghost = omegaField.getNghost();
 
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
         Kokkos::parallel_for(
-            "reconstruct_spectral_fields",
+            "reconstruct_spectral_vorticity",
             policy_type({nghost, nghost},
                         {static_cast<int>(omegaOut.extent(0)) - nghost,
                          static_cast<int>(omegaOut.extent(1)) - nghost}),
             KOKKOS_LAMBDA(const int i, const int j) {
               omegaOut(i, j) = omegaGrid(i, j).real();
-              velocityOut(i, j)[0] = uxGrid(i, j).real();
-              velocityOut(i, j)[1] = uyGrid(i, j).real();
             });
         Kokkos::fence();
       } else {
         throw std::runtime_error(
-            "AlvineManager::reconstructSpectralFields is implemented for 2D VIC only");
+            "AlvineManager::reconstructSpectralVorticity is implemented for 2D VIC only");
       }
     }
 
