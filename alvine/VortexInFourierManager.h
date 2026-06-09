@@ -1,6 +1,7 @@
 #ifndef IPPL_VORTEX_IN_FOURIER_MANAGER_H
 #define IPPL_VORTEX_IN_FOURIER_MANAGER_H
 
+#include <fstream>
 #include <memory>
 
 #include "AlvineManager.h"
@@ -283,6 +284,95 @@ void logEnstrophyDiagnostics() {
     }
 }
 
+void logVorticitySpectrum() {
+    const auto spectrum = this->computeSpectralVorticitySpectrum();
+
+    if (ippl::Comm->rank() != 0) {
+        return;
+    }
+
+    std::ofstream out(
+        "spectral_vorticity_spectrum.csv",
+        this->it_m == 0 ? std::ios::out : std::ios::app);
+    out.precision(16);
+    out.setf(std::ios::scientific, std::ios::floatfield);
+
+    if (this->it_m == 0) {
+        out << "step,time,shell,normalized_radius,mode_count,shell_enstrophy,"
+               "mean_mode_enstrophy,cumulative_fraction,complete_shell\n";
+    }
+
+    double totalEnstrophy = 0.0;
+    for (const auto& shell : spectrum) {
+        totalEnstrophy += shell.enstrophy;
+    }
+
+    std::size_t completeShellLimit = spectrum.size();
+    for (std::size_t shell = 0; shell < spectrum.size(); ++shell) {
+        if (!spectrum[shell].complete) {
+            completeShellLimit = shell;
+            break;
+        }
+    }
+
+    const std::size_t tailStart =
+        static_cast<std::size_t>(std::ceil(0.8 * static_cast<double>(completeShellLimit)));
+    double completeEnstrophy = 0.0;
+    double tailEnstrophy = 0.0;
+    for (std::size_t shell = 0; shell < completeShellLimit; ++shell) {
+        completeEnstrophy += spectrum[shell].enstrophy;
+        if (shell >= tailStart) {
+            tailEnstrophy += spectrum[shell].enstrophy;
+        }
+    }
+
+    double cumulativeEnstrophy = 0.0;
+    for (std::size_t shell = 0; shell < spectrum.size(); ++shell) {
+        const auto& bin = spectrum[shell];
+        cumulativeEnstrophy += bin.enstrophy;
+
+        const double normalizedRadius =
+            completeShellLimit > 0
+                ? static_cast<double>(shell) / static_cast<double>(completeShellLimit)
+                : 0.0;
+        const double meanModeEnstrophy =
+            bin.modeCount > 0 ? bin.enstrophy / static_cast<double>(bin.modeCount) : 0.0;
+        const double cumulativeFraction =
+            totalEnstrophy > 0.0 ? cumulativeEnstrophy / totalEnstrophy : 0.0;
+
+        out << this->it_m << ","
+            << this->time_m << ","
+            << shell << ","
+            << normalizedRadius << ","
+            << bin.modeCount << ","
+            << bin.enstrophy << ","
+            << meanModeEnstrophy << ","
+            << cumulativeFraction << ","
+            << (bin.complete ? 1 : 0) << "\n";
+    }
+
+    std::ofstream tailOut(
+        "spectral_vorticity_tail.csv",
+        this->it_m == 0 ? std::ios::out : std::ios::app);
+    tailOut.precision(16);
+    tailOut.setf(std::ios::scientific, std::ios::floatfield);
+
+    if (this->it_m == 0) {
+        tailOut << "step,time,tail_start_shell,complete_shell_limit,"
+                   "tail_enstrophy,complete_enstrophy,tail_fraction\n";
+    }
+
+    const double tailFraction =
+        completeEnstrophy > 0.0 ? tailEnstrophy / completeEnstrophy : 0.0;
+    tailOut << this->it_m << ","
+            << this->time_m << ","
+            << tailStart << ","
+            << completeShellLimit << ","
+            << tailEnstrophy << ","
+            << completeEnstrophy << ","
+            << tailFraction << "\n";
+}
+
 
 void logDivergenceDiagnostics() {
     double divL2 = this->computeSpectralDivergenceL2();
@@ -327,7 +417,6 @@ void logDivergenceDiagnostics() {
       IpplTimings::startTimer(par2gridTimer);	
       this->spectralScatter();
       IpplTimings::stopTimer(par2gridTimer);	
-      auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
 
       // claculate stream function
       // TODO(VIF): replace with computeSpectralVelocityModes().
@@ -340,8 +429,8 @@ void logDivergenceDiagnostics() {
       IpplTimings::startTimer(PTimer);
       //this->computeVelocityField();
       logEnergyDiagnostics();
-      Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
       logEnstrophyDiagnostics();
+      logVorticitySpectrum();
       logDivergenceDiagnostics();
       IpplTimings::stopTimer(PTimer);
 
