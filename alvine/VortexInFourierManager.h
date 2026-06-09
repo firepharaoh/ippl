@@ -518,16 +518,22 @@ void dumpParticleDataPerRank() {
       static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
       IpplTimings::startTimer(dumpTimer);
 
-      // TODO(VIF): update dumps to either reconstruct a diagnostic grid or dump spectral quantities.
-      this->par2grid();
-      auto omega_current = this->fcontainer_m->getOmegaField().deepCopy();
-      this->fsolver_m->runSolver();
-      this->computeVelocityField();
-      Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_current.getView());
+      // dump() runs after the particle push, so refresh the modes to make the
+      // reconstructed fields consistent with the particle positions and step.
+      this->spectralScatter();
+      this->computeSpectralVelocityModes();
+      this->reconstructSpectralFields(
+          this->fcontainer_m->getOmegaField(),
+          this->fcontainer_m->getUField());
 
       alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
                                       this->fcontainer_m->getOmegaField(),
                                       this->rmin_m, this->hr_m, this->it_m);
+      alvine::vtk::writeVectorField2D("data/VortexInFourier", "velocity",
+                                      this->fcontainer_m->getUField(),
+                                      this->rmin_m, this->hr_m, this->it_m);
+      alvine::vtk::writeParticles2D("data/VortexInFourier", "particles",
+                                    *this->pcontainer_m, this->it_m);
 
       IpplTimings::stopTimer(dumpTimer);
     }
