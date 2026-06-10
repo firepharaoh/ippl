@@ -3,6 +3,7 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -169,6 +170,79 @@ void writeVectorField2D(const std::string& outputDir, const std::string& name, F
             const int li = i - local[0].first() + nghost;
             const int lj = j - local[1].first() + nghost;
             vtkout << host(li, lj)[0] << "\t" << host(li, lj)[1] << "\t0\n";
+        }
+    }
+}
+
+template <typename ComplexFieldType, typename VectorType>
+void writeFourierMagnitudeField2D(const std::string& outputDir, const std::string& name,
+                                  ComplexFieldType& field, const VectorType& lengths, int step) {
+    static_assert(ComplexFieldType::dim == 2,
+                  "Alvine Fourier VTK output expects a 2D complex field.");
+
+    if (ippl::Comm->size() != 1) {
+        throw std::runtime_error(
+            "writeFourierMagnitudeField2D currently supports one MPI rank only.");
+    }
+
+    ensureOutputDirectory(outputDir);
+
+    auto host = field.getHostMirror();
+    Kokkos::deep_copy(host, field.getView());
+
+    const auto& domain = field.getLayout().getDomain();
+    const auto& local  = field.getLayout().getLocalNDIndex();
+    const int nghost   = field.getNghost();
+    const int nx       = domain[0].length();
+    const int ny       = domain[1].length();
+    const double area  = lengths[0] * lengths[1];
+    const double pi    = std::acos(-1.0);
+    const double dkx   = 2.0 * pi / lengths[0];
+    const double dky   = 2.0 * pi / lengths[1];
+
+    const auto file = legacyFileName(outputDir, name, step);
+    std::ofstream vtkout(file, std::ios::out);
+    if (!vtkout) {
+        throw std::runtime_error("Could not open VTK file: " + file.string());
+    }
+
+    vtkout.precision(10);
+    vtkout.setf(std::ios::scientific, std::ios::floatfield);
+
+    vtkout << "# vtk DataFile Version 2.0\n";
+    vtkout << name << "\n";
+    vtkout << "ASCII\n";
+    vtkout << "DATASET STRUCTURED_POINTS\n";
+    vtkout << "DIMENSIONS " << nx + 1 << " " << ny + 1 << " 2\n";
+    vtkout << "ORIGIN " << -(nx / 2) * dkx << " " << -(ny / 2) * dky << " 0\n";
+    vtkout << "SPACING " << dkx << " " << dky << " 1\n";
+    vtkout << "CELL_DATA " << nx * ny << "\n";
+    vtkout << "SCALARS omega_hat_magnitude float 1\n";
+    vtkout << "LOOKUP_TABLE default\n";
+
+    // Output indices are fftshifted: the first cell is the most negative mode,
+    // and the zero mode lies at the center of the VTK grid.
+    for (int sy = 0; sy < ny; ++sy) {
+        const int gy = (sy + (ny + 1) / 2) % ny;
+        for (int sx = 0; sx < nx; ++sx) {
+            const int gx = (sx + (nx + 1) / 2) % nx;
+            const int li = gx - local[0].first() + nghost;
+            const int lj = gy - local[1].first() + nghost;
+            vtkout << Kokkos::abs(host(li, lj)) / area << "\n";
+        }
+    }
+
+    vtkout << "SCALARS log10_omega_hat_magnitude float 1\n";
+    vtkout << "LOOKUP_TABLE default\n";
+    constexpr double floor = 1.0e-300;
+    for (int sy = 0; sy < ny; ++sy) {
+        const int gy = (sy + (ny + 1) / 2) % ny;
+        for (int sx = 0; sx < nx; ++sx) {
+            const int gx = (sx + (nx + 1) / 2) % nx;
+            const int li = gx - local[0].first() + nghost;
+            const int lj = gy - local[1].first() + nghost;
+            const double magnitude = Kokkos::abs(host(li, lj)) / area;
+            vtkout << std::log10(magnitude + floor) << "\n";
         }
     }
 }

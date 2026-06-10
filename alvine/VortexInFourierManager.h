@@ -526,6 +526,10 @@ void dumpParticleDataPerRank() {
       alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
                                       this->fcontainer_m->getOmegaField(),
                                       this->rmin_m, this->hr_m, this->it_m);
+      const auto lengths = this->rmax_m - this->rmin_m;
+      alvine::vtk::writeFourierMagnitudeField2D(
+          "data/VortexInFourier/fourier", "omega_hat",
+          this->omega_hat_m, lengths, this->it_m);
 
       IpplTimings::stopTimer(dumpTimer);
     }
