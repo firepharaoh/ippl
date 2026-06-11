@@ -207,7 +207,7 @@ double computeParticleCirculation() {
     );
 
     double gamma_global = 0.0;
-    ippl::Comm->allreduce(gamma_local, gamma_global, 1, std::plus<double>());
+    ippl::Comm->reduce(gamma_local, gamma_global, 1, std::plus<double>());
 
     return gamma_global;
 }
@@ -234,7 +234,7 @@ double computeGridCirculation() {
     gamma_local *= dA;
 
     double gamma_global = 0.0;
-    ippl::Comm->allreduce(gamma_local, gamma_global, 1, std::plus<double>());
+    ippl::Comm->reduce(gamma_local, gamma_global, 1, std::plus<double>());
 
     return gamma_global;
 }
