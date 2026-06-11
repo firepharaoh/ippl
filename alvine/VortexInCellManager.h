@@ -106,6 +106,7 @@ void pre_run() override {
       logEnergyDiagnostics();
       Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
       logEnstrophyDiagnostics();
+      this->logCirculationDiagnostics(this->computeParticleCirculation());
       logDivergenceDiagnostics();
       this->grid2par();
 
@@ -346,6 +347,7 @@ void logDivergenceDiagnostics() {
       logEnergyDiagnostics();
       Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
       logEnstrophyDiagnostics();
+      this->logCirculationDiagnostics(this->computeParticleCirculation());
       logDivergenceDiagnostics();
       IpplTimings::stopTimer(PTimer);
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -85,6 +86,8 @@ protected:
     bool energy_initialized_m = false;
     double enstrophy0_m = 0.0;
     bool enstrophy_initialized_m = false;
+    double circulation0_m = 0.0;
+    bool circulation_initialized_m = false;
 public:
 
     double getTime() { return time_m; }
@@ -204,7 +207,7 @@ double computeParticleCirculation() {
     );
 
     double gamma_global = 0.0;
-    ippl::Comm->reduce(gamma_local, gamma_global, 1, std::plus<double>());
+    ippl::Comm->allreduce(gamma_local, gamma_global, 1, std::plus<double>());
 
     return gamma_global;
 }
@@ -231,9 +234,42 @@ double computeGridCirculation() {
     gamma_local *= dA;
 
     double gamma_global = 0.0;
-    ippl::Comm->reduce(gamma_local, gamma_global, 1, std::plus<double>());
+    ippl::Comm->allreduce(gamma_local, gamma_global, 1, std::plus<double>());
 
     return gamma_global;
+}
+
+void logCirculationDiagnostics(double circulation) {
+    if (!circulation_initialized_m) {
+        circulation0_m = circulation;
+        circulation_initialized_m = true;
+
+        if (ippl::Comm->rank() == 0) {
+            std::ofstream out("circulation.csv", std::ios::out);
+            out << "step,time,circulation,rel_error,normalized_circulation\n";
+        }
+        ippl::Comm->barrier();
+    }
+
+    const double relError = relativeError(circulation, circulation0_m);
+    const double normalizedCirculation =
+        circulation / (std::fabs(circulation0_m) > 1e-30 ? circulation0_m : 1e-30);
+
+    if (ippl::Comm->rank() == 0) {
+        Inform m("circulation ");
+        m << "circulation = " << circulation
+          << ", relError = " << relError
+          << ", normalizedCirculation = " << normalizedCirculation << endl;
+
+        std::ofstream out("circulation.csv", std::ios::app);
+        out.precision(16);
+        out.setf(std::ios::scientific, std::ios::floatfield);
+        out << it_m << ","
+            << time_m << ","
+            << circulation << ","
+            << relError << ","
+            << normalizedCirculation << "\n";
+    }
 }
 
 void checkCirculationConservation(double relError, Inform& m) {

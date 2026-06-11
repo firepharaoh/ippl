@@ -97,6 +97,7 @@ void pre_run() override {
       logEnergyDiagnostics();
       Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
       logEnstrophyDiagnostics();
+      this->logCirculationDiagnostics(this->computeGridCirculation());
       logDivergenceDiagnostics();
 //      this->grid2par();
 	double omega_init = computeOmegaL2();
@@ -534,6 +535,7 @@ void advectForward() {
     IpplTimings::stopTimer(PTimer);
     Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
     logEnstrophyDiagnostics();
+    this->logCirculationDiagnostics(this->computeGridCirculation());
     logDivergenceDiagnostics();
 
     // 2. Create virtual particles from omega^n

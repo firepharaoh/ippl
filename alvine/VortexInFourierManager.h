@@ -430,6 +430,7 @@ void logDivergenceDiagnostics() {
       //this->computeVelocityField();
       logEnergyDiagnostics();
       logEnstrophyDiagnostics();
+      this->logCirculationDiagnostics(this->computeParticleCirculation());
       logVorticitySpectrum();
       logDivergenceDiagnostics();
       IpplTimings::stopTimer(PTimer);
