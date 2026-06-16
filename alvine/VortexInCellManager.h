@@ -99,24 +99,7 @@ public:
         // this->fcontainer_m, this->pcontainer_m, this->fsolver_m) );
 
         initializeParticles();
-
-        this->par2grid();
-        auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
-
-        this->fsolver_m->runSolver();
-        this->computeVelocityField();
-        logEnergyDiagnostics();
-        Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
-        logEnstrophyDiagnostics();
-        this->logCirculationDiagnostics(this->computeParticleCirculation());
-        logDivergenceDiagnostics();
-        this->grid2par();
-
-        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
-
-        pc->R_old = pc->R;
-        pc->R     = pc->R_old + pc->P * this->dt_m;
-        pc->update();
+        this->pcontainer_m->R_old = this->pcontainer_m->R;
     }
 
     void initializeParticles() {
@@ -349,11 +332,17 @@ public:
 
         // drift
         IpplTimings::startTimer(RTimer);
-        typename ippl::ParticleBase<
-            ippl::ParticleSpatialLayout<T, Dim>>::particle_position_type R_old_temp = pc->R_old;
+        if (this->it_m == 0) {
+            pc->R_old = pc->R;
+            pc->R     = pc->R + pc->P * this->dt_m;
+        } else {
+            typename ippl::ParticleBase<
+                ippl::ParticleSpatialLayout<T, Dim>>::particle_position_type R_old_temp =
+                pc->R_old;
 
-        pc->R_old = pc->R;
-        pc->R     = R_old_temp + 2 * pc->P * this->dt_m;
+            pc->R_old = pc->R;
+            pc->R     = R_old_temp + 2 * pc->P * this->dt_m;
+        }
         IpplTimings::stopTimer(RTimer);
 
         IpplTimings::startTimer(updateTimer);
