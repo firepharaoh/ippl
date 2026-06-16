@@ -13,122 +13,123 @@
 #include "Random/InverseTransformSampling.h"
 #include "Random/NormalDistribution.h"
 #include "Random/Randu.h"
-#include "SinusoidalJitter.hpp"
+// #include "SinusoidalJitter.hpp"
 #include "VortexDistributions.h"
 #include "VtkDump.hpp"
 
 using view_type = typename ippl::detail::ViewType<ippl::Vector<double, Dim>, 1>::view_type;
-using host_type = typename ippl::ParticleAttrib<T>::host_mirror_type; /*using host_type = typename ippl::ParticleAttrib<T>::HostMirror;*/
-
+using host_type = typename ippl::ParticleAttrib<T>::host_mirror_type;
+/*using host_type = typename ippl::ParticleAttrib<T>::HostMirror;*/
 
 template <typename T, unsigned Dim, typename VortexDistribution>
 class FSLManager : public AlvineManager<T, Dim> {
 public:
     using ParticleContainer_t = ParticleContainer<T, Dim>;
     using FieldContainer_t    = FieldContainer<T, Dim>;
-    using FieldSolver_t       = FieldSolver<T, Dim>; 
-    using LoadBalancer_t      = LoadBalancer<T, Dim>;    
+    using FieldSolver_t       = FieldSolver<T, Dim>;
+    using LoadBalancer_t      = LoadBalancer<T, Dim>;
+
     FieldLayout_t<Dim> FL_m;    // Store the field layout
     Mesh_t<Dim> mesh_m;          // Store the mesh
 
     // Constructor declaration
-    FSLManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, 
+    FSLManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
                         std::string& solver_, int dump_freq_,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
-    : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_) {
-        this->rmin_m = rmin_;
-        this->rmax_m = rmax_;
+        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_) {
+        this->rmin_m   = rmin_;
+        this->rmax_m   = rmax_;
         this->origin_m = origin_;
-        this->FL_m = FL_;          // Store the layout
-        this->mesh_m = mesh_;      // Store the mesh
+        this->FL_m     = FL_;       // Store the layout
+        this->mesh_m   = mesh_;     // Store the mesh
     }
 
     ~FSLManager() {}
 
-void pre_run() override {
-      for (unsigned i = 0; i < Dim; i++) {
-          this->domain_m[i] = ippl::Index(this->nr_m[i]);
-      }
+    void pre_run() override {
+        for (unsigned i = 0; i < Dim; i++) {
+            this->domain_m[i] = ippl::Index(this->nr_m[i]);
+        }
 
-      Vector_t<double, Dim> dr = this->rmax_m - this->rmin_m;
+        Vector_t<double, Dim> dr = this->rmax_m - this->rmin_m;
 
-      this->hr_m = dr / this->nr_m;
+        this->hr_m = dr / this->nr_m;
 
-      // Courant condition
-      this->dt_m = 0.05;//std::min(0.05, 0.5 * ( *std::min_element(this->hr_m.begin(), this->hr_m.end()) ) );
+        // Courant condition
+        this->dt_m = 0.05;
+        // std::min(0.05, 0.5 * ( *std::min_element(this->hr_m.begin(), this->hr_m.end()) ) );
 
-      this->it_m = 0;
-      this->time_m = 0.0;
+        this->it_m   = 0;
+        this->time_m = 0.0;
 
-      //this->np_m = 10000; //this->nr_m[0] * this->nr_m[0];
+        // this->np_m = 10000; //this->nr_m[0] * this->nr_m[0];
 
-      this->decomp_m.fill(true);
-      this->isAllPeriodic_m = true;
+        this->decomp_m.fill(true);
+        this->isAllPeriodic_m = true;
 
-      this->setFieldContainer(std::make_shared<FieldContainer_t>(
+        this->setFieldContainer(std::make_shared<FieldContainer_t>(
             this->hr_m, this->rmin_m, this->rmax_m, this->decomp_m, this->domain_m, this->origin_m,
             this->isAllPeriodic_m));
 
-      this->setParticleContainer(std::make_shared<ParticleContainer_t>(
+        this->setParticleContainer(std::make_shared<ParticleContainer_t>(
             this->fcontainer_m->getMesh(), this->fcontainer_m->getFL()));
-        
-      this->fcontainer_m->initializeFields();
 
-      this->setFieldSolver( std::make_shared<FieldSolver_t>( this->solver_m, &this->fcontainer_m->getOmegaField()) );
-      
-      this->fsolver_m->initSolver();
+        this->fcontainer_m->initializeFields();
 
-      //this->setLoadBalancer( std::make_shared<LoadBalancer_t>( this->lbt_m, this->fcontainer_m, this->pcontainer_m, this->fsolver_m) );
+        this->setFieldSolver(std::make_shared<FieldSolver_t>(
+            this->solver_m, &this->fcontainer_m->getOmegaField()));
 
-      //initializeParticles();
+        this->fsolver_m->initSolver();
 
-      //this->par2grid();
+        // this->setLoadBalancer( std::make_shared<LoadBalancer_t>( this->lbt_m,
+        // this->fcontainer_m, this->pcontainer_m, this->fsolver_m) );
 
-      initializeGridVorticity();
-      normalizeInitialGridCirculation();
+        // initializeParticles();
 
-      auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
-      this->fsolver_m->runSolver();
-      this->computeVelocityField();
-      logEnergyDiagnostics();
-      Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
-      logEnstrophyDiagnostics();
-      this->logCirculationDiagnostics(this->computeGridCirculation());
-      logDivergenceDiagnostics();
-//      this->grid2par();
-	double omega_init = computeOmegaL2();
+        // this->par2grid();
 
-if (ippl::Comm->rank() == 0) {
-    Inform m("debug ");
-    m << "omega L2 after initialization = " << omega_init << endl;
-}
+        initializeGridVorticity();
+        //normalizeInitialGridCirculation();
 
+        auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
+        this->fsolver_m->runSolver();
+        this->computeVelocityField();
+        logEnergyDiagnostics();
+        Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
+        logEnstrophyDiagnostics();
+        this->logCirculationDiagnostics(this->computeGridCirculation());
+        logDivergenceDiagnostics();
+        // this->grid2par();
+        double omega_init = computeOmegaL2();
+
+        if (ippl::Comm->rank() == 0) {
+            Inform m("debug ");
+            m << "omega L2 after initialization = " << omega_init << endl;
+        }
     }
 
-double computeOmegaL2() {
-    auto& omegaField = this->fcontainer_m->getOmegaField();
-    auto omega = omegaField.getView();
-    double local = 0.0;
-    const int nghost = omegaField.getNghost();
+    double computeOmegaL2() {
+        auto& omegaField = this->fcontainer_m->getOmegaField();
+        auto omega       = omegaField.getView();
+        double local     = 0.0;
+        const int nghost = omegaField.getNghost();
 
-    Kokkos::parallel_reduce(
-        "omega_l2",
-        ippl::getRangePolicy(omega, nghost),
-        KOKKOS_LAMBDA(const int i, const int j, double& sum) {
-            sum += omega(i, j) * omega(i, j);
-        },
-        local
-    );
+        Kokkos::parallel_reduce(
+            "omega_l2", ippl::getRangePolicy(omega, nghost),
+            KOKKOS_LAMBDA(const int i, const int j, double& sum) {
+                sum += omega(i, j) * omega(i, j);
+            },
+            local);
 
-    double global = 0.0;
-    ippl::Comm->reduce(local, global, 1, std::plus<double>());
+        double global = 0.0;
+        ippl::Comm->reduce(local, global, 1, std::plus<double>());
 
-    return std::sqrt(global);
-}
+        return std::sqrt(global);
+    }
 
 void logPushDebug() {
     auto pc = this->pcontainer_m;
@@ -310,9 +311,10 @@ void initializeGridVorticity() {
             int j = j0 + lj - nghost;
 
             double y = rmin[1] + (j + 0.5) * hr[1];
-            double perturb = alvine::sinusoidalVorticityPerturbation(i, j);
+            //double perturb = alvine::sinusoidalVorticityPerturbation(i, j);
 
-            omega_view(li, lj) = (y >= y_low && y <= y_high) ? 1.0 + perturb : 0.0;
+            //omega_view(li, lj) = (y >= y_low && y <= y_high) ? 1.0 + perturb : 0.0;
+            omega_view(li, lj) = 2.0 * cos(rmin[0] + (i + 0.5) * hr[0]) * cos(rmin[1] + (j + 0.5) * hr[1]) ; //Taylor-Green vortex initial condition.
         }
     );
 
@@ -383,176 +385,157 @@ void clearVirtualParticles() {
     pc->destroy(invalid, nlocal);
 }
 
-void logEnergyDiagnostics() {
-    double energy = this->computeKineticEnergy();
+    void logEnergyDiagnostics() {
+        double energy = this->computeKineticEnergy();
 
-    if (!this->energy_initialized_m) {
-        this->energy0_m = energy;
-        this->energy_initialized_m = true;
+        if (!this->energy_initialized_m) {
+            this->energy0_m            = energy;
+            this->energy_initialized_m = true;
+
+            if (ippl::Comm->rank() == 0) {
+                std::ofstream out("energy.csv", std::ios::out);
+                out << "step,time,energy,rel_error,normalized_energy\n";
+            }
+            ippl::Comm->barrier();
+        }
+
+        double relErr = this->relativeError(energy, this->energy0_m);
+        double normalizedEnergy =
+            energy / (std::fabs(this->energy0_m) > 1e-30 ? this->energy0_m : 1e-30);
 
         if (ippl::Comm->rank() == 0) {
-            std::ofstream out("energy.csv", std::ios::out);
-            out << "step,time,energy,rel_error,normalized_energy\n";
-            out.close();
+            Inform m("energy ");
+            m << "kinetic energy = " << energy << ", relError = " << relErr
+              << ", normalizedEnergy = " << normalizedEnergy << endl;
+
+            std::ofstream out("energy.csv", std::ios::app);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+            out << this->it_m << "," << this->time_m << "," << energy << "," << relErr << ","
+                << normalizedEnergy << "\n";
         }
-        ippl::Comm->barrier();
     }
 
-    double relErr = this->relativeError(energy, this->energy0_m);
-    double normalizedEnergy =
-        energy / (std::fabs(this->energy0_m) > 1e-30 ? this->energy0_m : 1e-30);
+    void logEnstrophyDiagnostics() {
+        double enstrophy = this->computeEnstrophy();
 
-    if (ippl::Comm->rank() == 0) {
-        Inform m("energy ");
-        m << "kinetic energy = " << energy
-          << ", relError = " << relErr
-          << ", normalizedEnergy = " << normalizedEnergy << endl;
+        if (!this->enstrophy_initialized_m) {
+            this->enstrophy0_m            = enstrophy;
+            this->enstrophy_initialized_m = true;
 
-        std::ofstream out("energy.csv", std::ios::app);
-        out.precision(16);
-        out.setf(std::ios::scientific, std::ios::floatfield);
-        out << this->it_m << ","
-            << this->time_m << ","
-            << energy << ","
-            << relErr << ","
-            << normalizedEnergy << "\n";
-        out.close();
-    }
-}
+            if (ippl::Comm->rank() == 0) {
+                std::ofstream out("enstrophy.csv", std::ios::out);
+                out << "step,time,enstrophy,rel_error\n";
+            }
+            ippl::Comm->barrier();
+        }
 
-void logEnstrophyDiagnostics() {
-    double enstrophy = this->computeEnstrophy();
-
-    if (!this->enstrophy_initialized_m) {
-        this->enstrophy0_m = enstrophy;
-        this->enstrophy_initialized_m = true;
+        double relErr = this->relativeError(enstrophy, this->enstrophy0_m);
 
         if (ippl::Comm->rank() == 0) {
-            std::ofstream out("enstrophy.csv", std::ios::out);
-            out << "step,time,enstrophy,rel_error\n";
-            out.close();
+            Inform m("enstrophy ");
+            m << "enstrophy = " << enstrophy << ", relError = " << relErr << endl;
+
+            std::ofstream out("enstrophy.csv", std::ios::app);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+            out << this->it_m << "," << this->time_m << "," << enstrophy << "," << relErr
+                << "\n";
         }
-        ippl::Comm->barrier();
     }
 
-    double relErr = this->relativeError(enstrophy, this->enstrophy0_m);
+    void logDivergenceDiagnostics() {
+        double divL2 = this->computeDivergenceL2();
 
-    if (ippl::Comm->rank() == 0) {
-        Inform m("enstrophy ");
-        m << "enstrophy = " << enstrophy
-          << ", relError = " << relErr << endl;
+        if (ippl::Comm->rank() == 0) {
+            Inform m("divergence ");
+            m << "L2 = " << divL2 << endl;
 
-        std::ofstream out("enstrophy.csv", std::ios::app);
-        out.precision(16);
-        out.setf(std::ios::scientific, std::ios::floatfield);
-        out << this->it_m << ","
-            << this->time_m << ","
-            << enstrophy << ","
-            << relErr << "\n";
-        out.close();
-    }
-}
+            std::ofstream out("divergence.csv", std::ios::app);
 
+            if (this->it_m == 0) {
+                out << "step,time,div_l2\n";
+            }
 
-void logDivergenceDiagnostics() {
-    double divL2 = this->computeDivergenceL2();
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
 
-    if (ippl::Comm->rank() == 0) {
-        Inform m("divergence ");
-        m << "L2 = " << divL2 << endl;
-
-        std::ofstream out("divergence.csv", std::ios::app);
-
-        if (this->it_m == 0) {
-            out << "step,time,div_l2\n";
+            out << this->it_m << "," << this->time_m << "," << divL2 << "\n";
         }
-
-        out.precision(16);
-        out.setf(std::ios::scientific, std::ios::floatfield);
-
-        out << this->it_m << ","
-            << this->time_m << ","
-            << divL2 << "\n";
-        out.close();
     }
-}
 
     void dump() override {
-      static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
-      IpplTimings::startTimer(dumpTimer);
+        static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
+        IpplTimings::startTimer(dumpTimer);
 
-      alvine::vtk::writeScalarField2D("data/FSL", "omega", this->fcontainer_m->getOmegaField(),
-                                      this->rmin_m, this->hr_m, this->it_m);
+        alvine::vtk::writeScalarField2D("data/FSL", "omega", this->fcontainer_m->getOmegaField(),
+                                        this->rmin_m, this->hr_m, this->it_m);
 
-      IpplTimings::stopTimer(dumpTimer);
+        IpplTimings::stopTimer(dumpTimer);
     }
 
     void logOmegaField() {
-      alvine::vtk::writeScalarFieldCsv2D("data/FSL/omega_csv", "omega",
-                                         this->fcontainer_m->getOmegaField(), this->rmin_m,
-                                         this->hr_m, this->it_m);
+        alvine::vtk::writeScalarFieldCsv2D("data/FSL/omega_csv", "omega",
+                                           this->fcontainer_m->getOmegaField(), this->rmin_m,
+                                           this->hr_m, this->it_m);
     }
 
     void post_step() override {
-      Inform m("Step: ");
-      this->time_m += this->dt_m;
-      this->it_m++;
+        Inform m("Step: ");
+        this->time_m += this->dt_m;
+        this->it_m++;
 
-      this->logOmegaField();
-      if (this->it_m % this->dump_freq_m == 0) {
-        // this->dump();
-      }
+        this->logOmegaField();
+        if (this->it_m % this->dump_freq_m == 0) {
+            // this->dump();
+        }
 
-      m << this->it_m << " Done" << endl;
+        m << this->it_m << " Done" << endl;
     }
 
     void advance() override {
-      advectForward();     
+        advectForward();
     }
 
-void advectForward() {
-    static IpplTimings::TimerRef PTimer =
-        IpplTimings::getTimer("pushVelocity");
-    static IpplTimings::TimerRef RTimer =
-        IpplTimings::getTimer("pushPosition");
-    static IpplTimings::TimerRef SolveTimer =
-        IpplTimings::getTimer("solve");
-    static IpplTimings::TimerRef par2gridTimer =
-        IpplTimings::getTimer("par2grid");
+    void advectForward() {
+        static IpplTimings::TimerRef PTimer        = IpplTimings::getTimer("pushVelocity");
+        static IpplTimings::TimerRef RTimer        = IpplTimings::getTimer("pushPosition");
+        static IpplTimings::TimerRef SolveTimer    = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
 
-    auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
+        auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
 
-    // 1. Compute velocity u^n from omega^n
-    // The FFT solver writes the Poisson solution into omegaField. Restore the
-    // saved vorticity before creating/remapping virtual particles.
-    IpplTimings::startTimer(SolveTimer);
-    this->fsolver_m->runSolver();
-    IpplTimings::stopTimer(SolveTimer);
+        // 1. Compute velocity u^n from omega^n
+        // The FFT solver writes the Poisson solution into omegaField. Restore the
+        // saved vorticity before creating/remapping virtual particles.
+        IpplTimings::startTimer(SolveTimer);
+        this->fsolver_m->runSolver();
+        IpplTimings::stopTimer(SolveTimer);
 
-    IpplTimings::startTimer(PTimer);
-    this->computeVelocityField();
-    logEnergyDiagnostics();
-    IpplTimings::stopTimer(PTimer);
-    Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
-    logEnstrophyDiagnostics();
-    this->logCirculationDiagnostics(this->computeGridCirculation());
-    logDivergenceDiagnostics();
+        IpplTimings::startTimer(PTimer);
+        this->computeVelocityField();
+        logEnergyDiagnostics();
+        IpplTimings::stopTimer(PTimer);
+        Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
+        logEnstrophyDiagnostics();
+        this->logCirculationDiagnostics(this->computeGridCirculation());
+        logDivergenceDiagnostics();
 
-    // 2. Create virtual particles from omega^n
-    initializeVirtualParticles();
+        // 2. Create virtual particles from omega^n
+        initializeVirtualParticles();
 
-    // 3. Push particles using u^n
-    IpplTimings::startTimer(RTimer);
-    pushVirtualParticlesForward();
-    IpplTimings::stopTimer(RTimer);
+        // 3. Push particles using u^n
+        IpplTimings::startTimer(RTimer);
+        pushVirtualParticlesForward();
+        IpplTimings::stopTimer(RTimer);
 
-    // 4. Scatter particles to form omega^{n+1}
-    IpplTimings::startTimer(par2gridTimer);
-    this->par2grid();
-    IpplTimings::stopTimer(par2gridTimer);
+        // 4. Scatter particles to form omega^{n+1}
+        IpplTimings::startTimer(par2gridTimer);
+        this->par2grid();
+        IpplTimings::stopTimer(par2gridTimer);
 
-    // 5. Delete temporary particles
-    clearVirtualParticles();
-}
+        // 5. Delete temporary particles
+        clearVirtualParticles();
+    }
 };
 #endif

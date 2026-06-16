@@ -72,7 +72,9 @@ int main(int argc, char* argv[]) {
 
         // Domain bounds (adjust as needed for your vortex problem)
         Vector_t<double, Dim> rmin(0.0);
-        Vector_t<double, Dim> rmax(10.0);
+        // Vector_t<double, Dim> rmax(10.0);
+        // Taylor-Green vortex is typically defined on a 2pi x 2pi domain.
+        Vector_t<double, Dim> rmax(2.0 * Kokkos::MathematicalConstants<double>::pi());
         Vector_t<double, Dim> origin = rmin;
         Vector_t<double, Dim> hr = (rmax - rmin) / nr;
 
