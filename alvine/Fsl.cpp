@@ -8,10 +8,10 @@ const char* TestName   = "FSL";
 
 #include "Ippl.h"
 
-#include <Kokkos_MathematicalConstants.hpp>
 #include <Kokkos_MathematicalFunctions.hpp>
 #include <Kokkos_Random.hpp>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <random>
 #include <set>
@@ -59,7 +59,7 @@ int main(int argc, char* argv[]) {
         Vector_t<double, Dim> rmin(0.0);
         // Vector_t<double, Dim> rmax(10.0);
         // Taylor-Green vortex is typically defined on a 2pi x 2pi domain.
-        Vector_t<double, Dim> rmax(2.0 * Kokkos::MathematicalConstants<double>::pi());
+        Vector_t<double, Dim> rmax(2.0 * std::acos(-1.0));
         Vector_t<double, Dim> origin = rmin;
         Vector_t<double, Dim> hr = (rmax - rmin) / nr;
 
