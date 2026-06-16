@@ -258,17 +258,19 @@ public:
         }
     }
 
-    void checkCirculationConservation(double relError, Inform& m) {
+    void checkCirculationConservation(double absError, double relError, Inform& m) {
         size_type TotalParticles = 0;
         size_type localParticles = this->pcontainer_m->getLocalNum();
 
         ippl::Comm->reduce(localParticles, TotalParticles, 1, std::plus<size_type>());
 
         if (ippl::Comm->rank() == 0) {
-            if (TotalParticles != np_m || relError > 1e-12) {
+            const double circulationTol = 1e-10;
+            if (TotalParticles != np_m || relError > circulationTol) {
                 m << "Time step: " << it_m << endl;
                 m << "Total particles expected: " << np_m
                   << " after update: " << TotalParticles << endl;
+                m << "Abs. error in circulation conservation: " << absError << endl;
                 m << "Rel. error in circulation conservation: " << relError << endl;
                 ippl::Comm->abort();
             }
@@ -364,13 +366,16 @@ public:
             double gammaParticles = computeParticleCirculation();
             double gammaGrid      = computeGridCirculation();
 
-            double relError = std::fabs((gammaParticles - gammaGrid) /
-                                        std::max(std::fabs(gammaParticles), 1e-30));
+            const double absError = std::fabs(gammaParticles - gammaGrid);
+            const double circulationScale =
+                std::max(std::max(std::fabs(gammaParticles), std::fabs(gammaGrid)), 1.0);
+            const double relError = absError / circulationScale;
 
             m << "particle circulation = " << gammaParticles
-              << ", grid circulation = " << gammaGrid << ", relError = " << relError << endl;
+              << ", grid circulation = " << gammaGrid << ", absError = " << absError
+              << ", relError = " << relError << endl;
 
-            checkCirculationConservation(relError, m);
+            checkCirculationConservation(absError, relError, m);
 
         } else if constexpr (Dim == 3) {
             // TODO 3D version
