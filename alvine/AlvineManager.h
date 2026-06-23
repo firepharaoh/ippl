@@ -534,6 +534,41 @@ public:
       }
     }
 
+    void reconstructSpectralVelocity(VField_t<T, Dim>& uField) {
+      if constexpr (Dim == 2) {
+        if (!spectralFft_mp) {
+          throw std::runtime_error(
+              "AlvineManager::reconstructSpectralVelocity called before initNUFFT");
+        }
+
+        auto uxModes = ux_hat_m.deepCopy();
+        auto uyModes = uy_hat_m.deepCopy();
+
+        spectralFft_mp->transform(ippl::BACKWARD, uxModes);
+        spectralFft_mp->transform(ippl::BACKWARD, uyModes);
+
+        auto uOut   = uField.getView();
+        auto uxGrid = uxModes.getView();
+        auto uyGrid = uyModes.getView();
+        const int nghost = uField.getNghost();
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "reconstruct_spectral_velocity",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(uOut.extent(0)) - nghost,
+                         static_cast<int>(uOut.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+              uOut(i, j)[0] = uxGrid(i, j).real();
+              uOut(i, j)[1] = uyGrid(i, j).real();
+            });
+        Kokkos::fence();
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::reconstructSpectralVelocity is implemented for 2D VIC only");
+      }
+    }
+
     double computeSpectralDivergenceL2() {
         if constexpr (Dim == 2) {
             auto ux = ux_hat_m.getView();

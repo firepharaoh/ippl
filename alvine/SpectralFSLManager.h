@@ -1,6 +1,7 @@
-#ifndef IPPL_VORTEX_IN_CELL_MANAGER_H
-#define IPPL_VORTEX_IN_CELL_MANAGER_H
+#ifndef IPPL_SPECTRAL_FSL_MANAGER_H
+#define IPPL_SPECTRAL_FSL_MANAGER_H
 
+#include <fstream>
 #include <memory>
 
 #include "AlvineManager.h"
@@ -22,7 +23,7 @@ using host_type = typename ippl::ParticleAttrib<T>::host_mirror_type;
 /*using host_type = typename ippl::ParticleAttrib<T>::HostMirror;*/
 
 template <typename T, unsigned Dim, typename VortexDistribution>
-class FSLManager : public AlvineManager<T, Dim> {
+class SpectralFSLManager : public AlvineManager<T, Dim> {
 public:
     using ParticleContainer_t = ParticleContainer<T, Dim>;
     using FieldContainer_t    = FieldContainer<T, Dim>;
@@ -33,7 +34,7 @@ public:
     Mesh_t<Dim> mesh_m;          // Store the mesh
 
     // Constructor declaration
-    FSLManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
+    SpectralFSLManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
                         std::string& solver_, int dump_freq_,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
@@ -48,7 +49,7 @@ public:
         this->mesh_m   = mesh_;     // Store the mesh
     }
 
-    ~FSLManager() {}
+    ~SpectralFSLManager() {}
 
     void pre_run() override {
         for (unsigned i = 0; i < Dim; i++) {
@@ -91,20 +92,28 @@ public:
         // initializeParticles();
 
         // this->par2grid();
-
+        this->initNUFFT();
         initializeGridVorticity();
         //normalizeInitialGridCirculation();
 
         auto omega0 = this->fcontainer_m->getOmegaField().deepCopy();
         this->fsolver_m->runSolver();
         this->computeVelocityField();
-        logEnergyDiagnostics();
         Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega0.getView());
-        logEnstrophyDiagnostics();
-        this->logCirculationDiagnostics(this->computeGridCirculation());
-        logDivergenceDiagnostics();
-        // this->grid2par();
         double omega_init = computeOmegaL2();
+
+        initializeVirtualParticles();
+        this->spectralScatter();
+        this->computeSpectralVelocityModes();
+
+        logEnergyDiagnostics();
+        logEnstrophyDiagnostics();
+        this->logCirculationDiagnostics(this->computeParticleCirculation());
+        logVorticitySpectrum();
+        logDivergenceDiagnostics();
+
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
 
         if (ippl::Comm->rank() == 0) {
             Inform m("debug ");
@@ -386,14 +395,14 @@ void clearVirtualParticles() {
 }
 
     void logEnergyDiagnostics() {
-        double energy = this->computeKineticEnergy();
+        double energy = this->computeSpectralEnergy();
 
         if (!this->energy_initialized_m) {
             this->energy0_m            = energy;
             this->energy_initialized_m = true;
 
             if (ippl::Comm->rank() == 0) {
-                std::ofstream out("energy.csv", std::ios::out);
+                std::ofstream out("spectral_energy.csv", std::ios::out);
                 out << "step,time,energy,rel_error,normalized_energy\n";
             }
             ippl::Comm->barrier();
@@ -404,11 +413,11 @@ void clearVirtualParticles() {
             energy / (std::fabs(this->energy0_m) > 1e-30 ? this->energy0_m : 1e-30);
 
         if (ippl::Comm->rank() == 0) {
-            Inform m("energy ");
+            Inform m("spectral energy ");
             m << "kinetic energy = " << energy << ", relError = " << relErr
               << ", normalizedEnergy = " << normalizedEnergy << endl;
 
-            std::ofstream out("energy.csv", std::ios::app);
+            std::ofstream out("spectral_energy.csv", std::ios::app);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
             out << this->it_m << "," << this->time_m << "," << energy << "," << relErr << ","
@@ -417,14 +426,14 @@ void clearVirtualParticles() {
     }
 
     void logEnstrophyDiagnostics() {
-        double enstrophy = this->computeEnstrophy();
+        double enstrophy = this->computeSpectralEnstrophy();
 
         if (!this->enstrophy_initialized_m) {
             this->enstrophy0_m            = enstrophy;
             this->enstrophy_initialized_m = true;
 
             if (ippl::Comm->rank() == 0) {
-                std::ofstream out("enstrophy.csv", std::ios::out);
+                std::ofstream out("spectral_enstrophy.csv", std::ios::out);
                 out << "step,time,enstrophy,rel_error\n";
             }
             ippl::Comm->barrier();
@@ -433,10 +442,10 @@ void clearVirtualParticles() {
         double relErr = this->relativeError(enstrophy, this->enstrophy0_m);
 
         if (ippl::Comm->rank() == 0) {
-            Inform m("enstrophy ");
+            Inform m("spectral enstrophy ");
             m << "enstrophy = " << enstrophy << ", relError = " << relErr << endl;
 
-            std::ofstream out("enstrophy.csv", std::ios::app);
+            std::ofstream out("spectral_enstrophy.csv", std::ios::app);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
             out << this->it_m << "," << this->time_m << "," << enstrophy << "," << relErr
@@ -444,14 +453,94 @@ void clearVirtualParticles() {
         }
     }
 
+    void logVorticitySpectrum() {
+        const auto spectrum = this->computeSpectralVorticitySpectrum();
+
+        if (ippl::Comm->rank() != 0) {
+            return;
+        }
+
+        std::ofstream out(
+            "spectral_vorticity_spectrum.csv",
+            this->it_m == 0 ? std::ios::out : std::ios::app);
+        out.precision(16);
+        out.setf(std::ios::scientific, std::ios::floatfield);
+
+        if (this->it_m == 0) {
+            out << "step,time,shell,normalized_radius,mode_count,shell_enstrophy,"
+                   "mean_mode_enstrophy,cumulative_fraction,complete_shell\n";
+        }
+
+        double totalEnstrophy = 0.0;
+        for (const auto& shell : spectrum) {
+            totalEnstrophy += shell.enstrophy;
+        }
+
+        std::size_t completeShellLimit = spectrum.size();
+        for (std::size_t shell = 0; shell < spectrum.size(); ++shell) {
+            if (!spectrum[shell].complete) {
+                completeShellLimit = shell;
+                break;
+            }
+        }
+
+        const std::size_t tailStart =
+            static_cast<std::size_t>(std::ceil(0.8 * static_cast<double>(completeShellLimit)));
+        double completeEnstrophy = 0.0;
+        double tailEnstrophy     = 0.0;
+        for (std::size_t shell = 0; shell < completeShellLimit; ++shell) {
+            completeEnstrophy += spectrum[shell].enstrophy;
+            if (shell >= tailStart) {
+                tailEnstrophy += spectrum[shell].enstrophy;
+            }
+        }
+
+        double cumulativeEnstrophy = 0.0;
+        for (std::size_t shell = 0; shell < spectrum.size(); ++shell) {
+            const auto& bin = spectrum[shell];
+            cumulativeEnstrophy += bin.enstrophy;
+
+            const double normalizedRadius =
+                completeShellLimit > 0
+                    ? static_cast<double>(shell) / static_cast<double>(completeShellLimit)
+                    : 0.0;
+            const double meanModeEnstrophy =
+                bin.modeCount > 0 ? bin.enstrophy / static_cast<double>(bin.modeCount) : 0.0;
+            const double cumulativeFraction =
+                totalEnstrophy > 0.0 ? cumulativeEnstrophy / totalEnstrophy : 0.0;
+
+            out << this->it_m << "," << this->time_m << "," << shell << ","
+                << normalizedRadius << "," << bin.modeCount << "," << bin.enstrophy << ","
+                << meanModeEnstrophy << "," << cumulativeFraction << ","
+                << (bin.complete ? 1 : 0) << "\n";
+        }
+
+        std::ofstream tailOut(
+            "spectral_vorticity_tail.csv",
+            this->it_m == 0 ? std::ios::out : std::ios::app);
+        tailOut.precision(16);
+        tailOut.setf(std::ios::scientific, std::ios::floatfield);
+
+        if (this->it_m == 0) {
+            tailOut << "step,time,tail_start_shell,complete_shell_limit,"
+                       "tail_enstrophy,complete_enstrophy,tail_fraction\n";
+        }
+
+        const double tailFraction =
+            completeEnstrophy > 0.0 ? tailEnstrophy / completeEnstrophy : 0.0;
+        tailOut << this->it_m << "," << this->time_m << "," << tailStart << ","
+                << completeShellLimit << "," << tailEnstrophy << "," << completeEnstrophy << ","
+                << tailFraction << "\n";
+    }
+
     void logDivergenceDiagnostics() {
-        double divL2 = this->computeDivergenceL2();
+        double divL2 = this->computeSpectralDivergenceL2();
 
         if (ippl::Comm->rank() == 0) {
-            Inform m("divergence ");
+            Inform m("spectral divergence ");
             m << "L2 = " << divL2 << endl;
 
-            std::ofstream out("divergence.csv", std::ios::app);
+            std::ofstream out("spectral_divergence.csv", std::ios::app);
 
             if (this->it_m == 0) {
                 out << "step,time,div_l2\n";
@@ -468,14 +557,14 @@ void clearVirtualParticles() {
         static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
         IpplTimings::startTimer(dumpTimer);
 
-        alvine::vtk::writeScalarField2D("data/FSL", "omega", this->fcontainer_m->getOmegaField(),
+        alvine::vtk::writeScalarField2D("data/SpectralFSL", "omega", this->fcontainer_m->getOmegaField(),
                                         this->rmin_m, this->hr_m, this->it_m);
 
         IpplTimings::stopTimer(dumpTimer);
     }
 
     void logOmegaField() {
-        alvine::vtk::writeScalarFieldCsv2D("data/FSL/omega_csv", "omega",
+        alvine::vtk::writeScalarFieldCsv2D("data/SpectralFSL/omega_csv", "omega",
                                            this->fcontainer_m->getOmegaField(), this->rmin_m,
                                            this->hr_m, this->it_m);
     }
@@ -503,24 +592,12 @@ void clearVirtualParticles() {
         static IpplTimings::TimerRef SolveTimer    = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
 
-        auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
+        //auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
 
         // 1. Compute velocity u^n from omega^n
         // The FFT solver writes the Poisson solution into omegaField. Restore the
         // saved vorticity before creating/remapping virtual particles.
-        IpplTimings::startTimer(SolveTimer);
-        this->fsolver_m->runSolver();
-        IpplTimings::stopTimer(SolveTimer);
-
-        IpplTimings::startTimer(PTimer);
-        this->computeVelocityField();
-        logEnergyDiagnostics();
-        IpplTimings::stopTimer(PTimer);
-        Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
-        logEnstrophyDiagnostics();
-        this->logCirculationDiagnostics(this->computeGridCirculation());
-        logDivergenceDiagnostics();
-
+                
         // 2. Create virtual particles from omega^n
         initializeVirtualParticles();
 
@@ -531,11 +608,22 @@ void clearVirtualParticles() {
 
         // 4. Scatter particles to form omega^{n+1}
         IpplTimings::startTimer(par2gridTimer);
-        this->par2grid();
+        this->spectralScatter();
         IpplTimings::stopTimer(par2gridTimer);
 
-        // 5. Delete temporary particles
-        //clearVirtualParticles();
+        //clearVirtualParticles(); Instead of deleting temporary particles, we can reuse them in the next step to avoid unnecessary memory allocation and deallocation overhead.
+        // 5. Compute the new vorticity field omega^{n+1} from the scattered particles
+        IpplTimings::startTimer(SolveTimer);
+        this->computeSpectralVelocityModes();
+        logEnergyDiagnostics();
+        logEnstrophyDiagnostics();
+        logVorticitySpectrum();
+        logDivergenceDiagnostics();
+
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        this->logCirculationDiagnostics(this->computeGridCirculation());
+        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        IpplTimings::stopTimer(SolveTimer);
     }
 };
 #endif

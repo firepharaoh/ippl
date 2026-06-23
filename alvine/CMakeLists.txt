@@ -17,11 +17,15 @@ set (COMPILE_FLAGS ${OPAL_CXX_FLAGS})
 add_executable (VortexInCell VortexInCell.cpp)
 add_executable (VortexInFourier VortexInFourier.cpp)
 add_executable(Fsl Fsl.cpp)
+add_executable(SpectralFSL SpectralFSL.cpp)
 target_include_directories(VortexInCell PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(VortexInCell ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 target_include_directories(Fsl PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(Fsl ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
+
+target_include_directories(SpectralFSL PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
+target_link_libraries(SpectralFSL ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 target_include_directories(VortexInFourier PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(VortexInFourier ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
