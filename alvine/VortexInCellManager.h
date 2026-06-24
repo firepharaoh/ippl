@@ -31,10 +31,12 @@ public:
 
     FieldLayout_t<Dim> FL_m;    // Store the field layout
     Mesh_t<Dim> mesh_m;          // Store the mesh
+    bool bootstrap_next_push_m = false;
+    int remesh_freq_m = 1;
 
     // Constructor declaration
     VortexInCellManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
-                        std::string& solver_, int dump_freq_,
+                        std::string& solver_, int dump_freq_, int remesh_freq_ = 1,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
@@ -46,6 +48,7 @@ public:
         this->origin_m = origin_;
         this->FL_m     = FL_;       // Store the layout
         this->mesh_m   = mesh_;     // Store the mesh
+        remesh_freq_m  = remesh_freq_;
     }
 
     ~VortexInCellManager() {}
@@ -212,6 +215,127 @@ public:
         Kokkos::fence();
     }
 
+    void clearParticles() {
+        auto pc = this->pcontainer_m;
+        size_type nlocal = pc->getLocalNum();
+
+        if (nlocal == 0) {
+            return;
+        }
+
+        Kokkos::View<bool*> invalid("invalid_particles", nlocal);
+
+        Kokkos::parallel_for(
+            "mark_all_particles_invalid", nlocal,
+            KOKKOS_LAMBDA(const int p) {
+                invalid(p) = true;
+            });
+        Kokkos::fence();
+
+        pc->destroy(invalid, nlocal);
+    }
+
+    void remeshParticlesFromGrid() {
+        clearParticles();
+
+        auto* mesh = &this->fcontainer_m->getMesh();
+        auto* FL = &this->fcontainer_m->getFL();
+        const bool isFEM = (this->solver_m == "FEM") || (this->solver_m == "FEM_PRECON");
+        ippl::detail::RegionLayout<double, Dim, Mesh_t<Dim>> rlayout(*FL, *mesh, isFEM);
+        auto local = FL->getLocalNDIndex();
+
+        unsigned nxp_global = static_cast<unsigned>(std::sqrt(this->np_m));
+        unsigned nyp_global = this->np_m / nxp_global;
+
+        double xmin_global = this->rmin_m[0];
+        double xmax_global = this->rmax_m[0];
+        double ymin_global = this->rmin_m[1];
+        double ymax_global = this->rmax_m[1];
+
+        double dxp = (xmax_global - xmin_global) / nxp_global;
+        double dyp = (ymax_global - ymin_global) / nyp_global;
+
+        int local_start_x = local[0].first();
+        int local_end_x   = local[0].last();
+        int local_start_y = local[1].first();
+        int local_end_y   = local[1].last();
+
+        double xmin_local = xmin_global + local_start_x * this->hr_m[0];
+        double xmax_local = xmin_global + (local_end_x + 1) * this->hr_m[0];
+        double ymin_local = ymin_global + local_start_y * this->hr_m[1];
+        double ymax_local = ymin_global + (local_end_y + 1) * this->hr_m[1];
+
+        double y_low  = std::max(ymin_local, ymin_global);
+        double y_high = std::min(ymax_local, ymax_global);
+        if (y_low >= y_high) {
+            return;
+        }
+
+        int ix_start =
+            static_cast<int>(std::ceil((xmin_local - xmin_global - 0.5 * dxp) / dxp));
+        int ix_end =
+            static_cast<int>(std::floor((xmax_local - xmin_global - 0.5 * dxp) / dxp));
+        ix_start = std::max(0, ix_start);
+        ix_end   = std::min(static_cast<int>(nxp_global - 1), ix_end);
+
+        int iy_start = static_cast<int>(std::ceil((y_low - ymin_global - 0.5 * dyp) / dyp));
+        int iy_end   = static_cast<int>(std::floor((y_high - ymin_global - 0.5 * dyp) / dyp));
+        iy_start = std::max(0, iy_start);
+        iy_end   = std::min(static_cast<int>(nyp_global - 1), iy_end);
+
+        unsigned nxp_local = ix_end - ix_start + 1;
+        unsigned nyp_local = iy_end - iy_start + 1;
+        size_type nlocal   = nxp_local * nyp_local;
+        const int nghost = this->fcontainer_m->getOmegaField().getNghost();
+
+        auto pc = this->pcontainer_m;
+        pc->create(nlocal);
+
+        auto R_view     = pc->R.getView();
+        auto R_old_view = pc->R_old.getView();
+        auto omega_p    = pc->omega.getView();
+        auto omega_g    = this->fcontainer_m->getOmegaField().getView();
+        auto P_view     = pc->P.getView();
+        auto u_g        = this->fcontainer_m->getUField().getView();
+
+        Vector_t<double, Dim> rmin = this->rmin_m;
+        Vector_t<double, Dim> hr   = this->hr_m;
+        double Ap = dxp * dyp;
+
+        Kokkos::parallel_for(
+            "remesh_vic_particles_from_grid",
+            nlocal,
+            KOKKOS_LAMBDA(const int p) {
+                unsigned ix_local  = p % nxp_local;
+                unsigned iy_local  = p / nxp_local;
+                unsigned ix_global = ix_start + ix_local;
+                unsigned iy_global = iy_start + iy_local;
+
+                double x = xmin_global + (ix_global + 0.5) * dxp;
+                double y = ymin_global + (iy_global + 0.5) * dyp;
+
+                int grid_i = static_cast<int>(Kokkos::floor((x - rmin[0]) / hr[0]));
+                int grid_j = static_cast<int>(Kokkos::floor((y - rmin[1]) / hr[1]));
+                grid_i = grid_i < local_start_x ? local_start_x : grid_i;
+                grid_i = grid_i > local_end_x ? local_end_x : grid_i;
+                grid_j = grid_j < local_start_y ? local_start_y : grid_j;
+                grid_j = grid_j > local_end_y ? local_end_y : grid_j;
+
+                int li = grid_i - local_start_x + nghost;
+                int lj = grid_j - local_start_y + nghost;
+
+                R_view(p)[0] = x;
+                R_view(p)[1] = y;
+                R_old_view(p) = R_view(p);
+
+                omega_p(p) = omega_g(li, lj) * Ap;
+                P_view(p) = u_g(li, lj);
+            });
+        Kokkos::fence();
+
+        bootstrap_next_push_m = true;
+    }
+
     void logEnergyDiagnostics() {
         double energy = this->computeKineticEnergy();
 
@@ -332,9 +456,10 @@ public:
 
         // drift
         IpplTimings::startTimer(RTimer);
-        if (this->it_m == 0) {
+        if (this->it_m == 0 || bootstrap_next_push_m) {
             pc->R_old = pc->R;
             pc->R     = pc->R + pc->P * this->dt_m;
+            bootstrap_next_push_m = false;
         } else {
             typename ippl::ParticleBase<
                 ippl::ParticleSpatialLayout<T, Dim>>::particle_position_type R_old_temp =
@@ -348,6 +473,13 @@ public:
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            IpplTimings::startTimer(par2gridTimer);
+            this->par2grid();
+            remeshParticlesFromGrid();
+            IpplTimings::stopTimer(par2gridTimer);
+        }
     }
 #include <memory>
 #include <fstream>
