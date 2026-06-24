@@ -485,9 +485,9 @@ void clearVirtualParticles() {
         this->time_m += this->dt_m;
         this->it_m++;
 
-        this->logOmegaField();
-        if (this->it_m % this->dump_freq_m == 0) {
-            // this->dump();
+        if (this->dump_freq_m > 0 && this->it_m % this->dump_freq_m == 0) {
+            // this->logOmegaField();
+            this->dump();
         }
 
         m << this->it_m << " Done" << endl;

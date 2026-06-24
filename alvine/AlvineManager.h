@@ -109,7 +109,7 @@ public:
         this->time_m += this->dt_m;
         this->it_m++;
 
-        if (this->it_m % dump_freq_m == 0) {
+        if (dump_freq_m > 0 && this->it_m % dump_freq_m == 0) {
             this->dump();
         }
         m << this->it_m << " Done" << endl;
