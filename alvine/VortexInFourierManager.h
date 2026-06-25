@@ -224,29 +224,7 @@ public:
         Kokkos::fence();
     }
 
-    void clearParticles() {
-        auto pc = this->pcontainer_m;
-        size_type nlocal = pc->getLocalNum();
-
-        if (nlocal == 0) {
-            return;
-        }
-
-        Kokkos::View<bool*> invalid("invalid_particles", nlocal);
-
-        Kokkos::parallel_for(
-            "mark_all_vif_particles_invalid", nlocal,
-            KOKKOS_LAMBDA(const int p) {
-                invalid(p) = true;
-            });
-        Kokkos::fence();
-
-        pc->destroy(invalid, nlocal);
-    }
-
     void remeshParticlesFromGrid() {
-        clearParticles();
-
         auto* FL = &this->fcontainer_m->getFL();
         auto local = FL->getLocalNDIndex();
 
@@ -293,13 +271,16 @@ public:
             return;
         }
 
-        unsigned nxp_local = ix_end - ix_start + 1;
-        unsigned nyp_local = iy_end - iy_start + 1;
-        size_type nlocal   = nxp_local * nyp_local;
+        unsigned nxp_local      = ix_end - ix_start + 1;
+        unsigned nyp_local      = iy_end - iy_start + 1;
+        size_type lattice_local = nxp_local * nyp_local;
         const int nghost = this->fcontainer_m->getOmegaField().getNghost();
 
         auto pc = this->pcontainer_m;
-        pc->create(nlocal);
+        size_type nlocal = pc->getLocalNum();
+        if (nlocal > lattice_local) {
+            nlocal = lattice_local;
+        }
 
         auto R_view     = pc->R.getView();
         auto R_old_view = pc->R_old.getView();
