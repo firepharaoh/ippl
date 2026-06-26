@@ -695,22 +695,33 @@ public:
         const int nghost = uField.getNghost();
 
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-        Kokkos::parallel_for(
-            "reconstruct_spectral_velocity",
-            policy_type({nghost, nghost},
-                        {static_cast<int>(uOut.extent(0)) - nghost,
-                         static_cast<int>(uOut.extent(1)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j) {
-              uOut(i, j)[0] = uxGrid(i, j).real();
-              uOut(i, j)[1] = uyGrid(i, j).real();
-            });
-        Kokkos::fence();
-      } else {
-        throw std::runtime_error(
-            "AlvineManager::reconstructSpectralVelocity is implemented for 2D VIC only");
-      }
-      uField = uField - uField.getVolumeAverage();
-    }
+	        Kokkos::parallel_for(
+	            "reconstruct_spectral_velocity",
+	            policy_type({nghost, nghost},
+	                        {static_cast<int>(uOut.extent(0)) - nghost,
+	                         static_cast<int>(uOut.extent(1)) - nghost}),
+	            KOKKOS_LAMBDA(const int i, const int j) {
+	              uOut(i, j)[0] = uxGrid(i, j).real();
+	              uOut(i, j)[1] = uyGrid(i, j).real();
+	            });
+	        Kokkos::fence();
+
+	        const auto uAverage = uField.getVolumeAverage();
+	        Kokkos::parallel_for(
+	            "remove_reconstructed_velocity_mean",
+	            policy_type({nghost, nghost},
+	                        {static_cast<int>(uOut.extent(0)) - nghost,
+	                         static_cast<int>(uOut.extent(1)) - nghost}),
+	            KOKKOS_LAMBDA(const int i, const int j) {
+	              uOut(i, j)[0] -= uAverage[0];
+	              uOut(i, j)[1] -= uAverage[1];
+	            });
+	        Kokkos::fence();
+	      } else {
+	        throw std::runtime_error(
+	            "AlvineManager::reconstructSpectralVelocity is implemented for 2D VIC only");
+	      }
+	    }
 
     double computeSpectralDivergenceL2() {
         if constexpr (Dim == 2) {
