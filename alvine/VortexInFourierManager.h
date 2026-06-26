@@ -269,7 +269,7 @@ public:
 
         if (ix_end < ix_start || iy_end < iy_start) {
             return;
-        }
+        } 
 
         unsigned nxp_local      = ix_end - ix_start + 1;
         unsigned nyp_local      = iy_end - iy_start + 1;

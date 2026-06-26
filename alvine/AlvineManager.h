@@ -445,6 +445,7 @@ public:
               const T derivativeKy = notMidY * laplaceKy;
 
               if (k2 == T(0)) {
+                omega(i, j) = Kokkos::complex<T>(0.0, 0.0);
                 ux(i, j) = Kokkos::complex<T>(0.0, 0.0);
                 uy(i, j) = Kokkos::complex<T>(0.0, 0.0);
               } else {
