@@ -286,8 +286,6 @@ public:
         auto R_old_view = pc->R_old.getView();
         auto omega_p    = pc->omega.getView();
         auto omega_g    = this->fcontainer_m->getOmegaField().getView();
-        auto P_view     = pc->P.getView();
-        auto u_g        = this->fcontainer_m->getUField().getView();
 
         Vector_t<double, Dim> rmin = this->rmin_m;
         Vector_t<double, Dim> hr   = this->hr_m;
@@ -320,10 +318,10 @@ public:
                 R_old_view(p) = R_view(p);
 
                 omega_p(p) = omega_g(li, lj) * Ap;
-                P_view(p) = u_g(li, lj);
             });
         Kokkos::fence();
 
+        this->spectralGather();
         bootstrap_next_push_m = true;
     }
 
@@ -560,10 +558,11 @@ public:
             IpplTimings::startTimer(SolveTimer);
             this->computeSpectralVelocityModes();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
-            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             IpplTimings::stopTimer(SolveTimer);
 
+            IpplTimings::startTimer(grid2parTimer);
             remeshParticlesFromGrid();
+            IpplTimings::stopTimer(grid2parTimer);
         }
     }
 #include <memory>
