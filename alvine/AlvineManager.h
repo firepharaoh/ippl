@@ -90,6 +90,7 @@ protected:
     bool enstrophy_initialized_m = false;
     double circulation0_m = 0.0;
     bool circulation_initialized_m = false;
+    bool tgv_velocity_diagnostics_initialized_m = false;
 
 public:
     double getTime() { return time_m; }
@@ -301,6 +302,146 @@ public:
         ippl::Comm->reduce(energy_local, energy_global, 1, std::plus<double>());
 
         return energy_global;
+    }
+
+    void logTgvVelocityDiagnostics(const std::string& filename = "tgv_velocity_error.csv") {
+        if constexpr (Dim == 2) {
+            auto& uField = this->fcontainer_m->getUField();
+            auto u_view  = uField.getView();
+
+            const auto& localND = uField.getLayout().getLocalNDIndex();
+            const double dA     = hr_m[0] * hr_m[1];
+            const int nghost    = uField.getNghost();
+
+            Vector_t<double, Dim> rmin = rmin_m;
+            Vector_t<double, Dim> hr   = hr_m;
+
+            double localErr2        = 0.0;
+            double localOppositeErr2 = 0.0;
+            double localRef2        = 0.0;
+
+            Kokkos::parallel_reduce(
+                "tgv_velocity_error_l2",
+                ippl::getRangePolicy(u_view, nghost),
+                KOKKOS_LAMBDA(const int i, const int j,
+                              double& err2,
+                              double& oppositeErr2,
+                              double& ref2) {
+                    const int gx = i - nghost + localND[0].first();
+                    const int gy = j - nghost + localND[1].first();
+
+                    const double x = rmin[0] + (gx + 0.5) * hr[0];
+                    const double y = rmin[1] + (gy + 0.5) * hr[1];
+
+                    const double uxExact = -Kokkos::cos(x) * Kokkos::sin(y);
+                    const double uyExact = Kokkos::sin(x) * Kokkos::cos(y);
+
+                    const double dux = u_view(i, j)[0] - uxExact;
+                    const double duy = u_view(i, j)[1] - uyExact;
+                    const double duxOpposite = u_view(i, j)[0] + uxExact;
+                    const double duyOpposite = u_view(i, j)[1] + uyExact;
+
+                    err2 += dux * dux + duy * duy;
+                    oppositeErr2 += duxOpposite * duxOpposite + duyOpposite * duyOpposite;
+                    ref2 += uxExact * uxExact + uyExact * uyExact;
+                },
+                Kokkos::Sum<double>(localErr2),
+                Kokkos::Sum<double>(localOppositeErr2),
+                Kokkos::Sum<double>(localRef2));
+
+            double localLinf         = 0.0;
+            double localOppositeLinf = 0.0;
+            double localRefLinf      = 0.0;
+
+            Kokkos::parallel_reduce(
+                "tgv_velocity_error_linf",
+                ippl::getRangePolicy(u_view, nghost),
+                KOKKOS_LAMBDA(const int i, const int j,
+                              double& maxErr,
+                              double& maxOppositeErr,
+                              double& maxRef) {
+                    const int gx = i - nghost + localND[0].first();
+                    const int gy = j - nghost + localND[1].first();
+
+                    const double x = rmin[0] + (gx + 0.5) * hr[0];
+                    const double y = rmin[1] + (gy + 0.5) * hr[1];
+
+                    const double uxExact = -Kokkos::cos(x) * Kokkos::sin(y);
+                    const double uyExact = Kokkos::sin(x) * Kokkos::cos(y);
+
+                    const double dux = u_view(i, j)[0] - uxExact;
+                    const double duy = u_view(i, j)[1] - uyExact;
+                    const double duxOpposite = u_view(i, j)[0] + uxExact;
+                    const double duyOpposite = u_view(i, j)[1] + uyExact;
+
+                    const double err = Kokkos::sqrt(dux * dux + duy * duy);
+                    const double oppositeErr =
+                        Kokkos::sqrt(duxOpposite * duxOpposite + duyOpposite * duyOpposite);
+                    const double ref = Kokkos::sqrt(uxExact * uxExact + uyExact * uyExact);
+
+                    if (err > maxErr) {
+                        maxErr = err;
+                    }
+                    if (oppositeErr > maxOppositeErr) {
+                        maxOppositeErr = oppositeErr;
+                    }
+                    if (ref > maxRef) {
+                        maxRef = ref;
+                    }
+                },
+                Kokkos::Max<double>(localLinf),
+                Kokkos::Max<double>(localOppositeLinf),
+                Kokkos::Max<double>(localRefLinf));
+
+            localErr2 *= dA;
+            localOppositeErr2 *= dA;
+            localRef2 *= dA;
+
+            double globalErr2         = 0.0;
+            double globalOppositeErr2 = 0.0;
+            double globalRef2         = 0.0;
+            double globalLinf         = 0.0;
+            double globalOppositeLinf = 0.0;
+            double globalRefLinf      = 0.0;
+
+            ippl::Comm->reduce(localErr2, globalErr2, 1, std::plus<double>());
+            ippl::Comm->reduce(localOppositeErr2, globalOppositeErr2, 1, std::plus<double>());
+            ippl::Comm->reduce(localRef2, globalRef2, 1, std::plus<double>());
+            ippl::Comm->reduce(localLinf, globalLinf, 1, std::greater<double>());
+            ippl::Comm->reduce(localOppositeLinf, globalOppositeLinf, 1, std::greater<double>());
+            ippl::Comm->reduce(localRefLinf, globalRefLinf, 1, std::greater<double>());
+
+            const double l2Error = std::sqrt(globalErr2);
+            const double l2OppositeError = std::sqrt(globalOppositeErr2);
+            const double l2Reference = std::sqrt(std::max(globalRef2, 1e-30));
+            const double linfReference = std::max(globalRefLinf, 1e-30);
+
+            if (ippl::Comm->rank() == 0) {
+                const bool firstWrite = !tgv_velocity_diagnostics_initialized_m;
+                std::ofstream out(filename, firstWrite ? std::ios::out : std::ios::app);
+                out.precision(16);
+                out.setf(std::ios::scientific, std::ios::floatfield);
+
+                if (firstWrite) {
+                    out << "step,time,l2_error,l2_rel_error,linf_error,linf_rel_error,"
+                        << "opposite_sign_l2_error,opposite_sign_l2_rel_error,"
+                        << "opposite_sign_linf_error,opposite_sign_linf_rel_error\n";
+                }
+
+                out << it_m << "," << time_m << ","
+                    << l2Error << "," << l2Error / l2Reference << ","
+                    << globalLinf << "," << globalLinf / linfReference << ","
+                    << l2OppositeError << "," << l2OppositeError / l2Reference << ","
+                    << globalOppositeLinf << "," << globalOppositeLinf / linfReference << "\n";
+
+                Inform m("tgv_velocity_error ");
+                m << "l2Rel = " << l2Error / l2Reference
+                  << ", linfRel = " << globalLinf / linfReference
+                  << ", oppositeSignL2Rel = " << l2OppositeError / l2Reference
+                  << ", oppositeSignLinfRel = " << globalOppositeLinf / linfReference << endl;
+            }
+            tgv_velocity_diagnostics_initialized_m = true;
+        }
     }
 
     void checkEnergyConservation(double energy, double relError, Inform& m) {
@@ -568,6 +709,7 @@ public:
         throw std::runtime_error(
             "AlvineManager::reconstructSpectralVelocity is implemented for 2D VIC only");
       }
+      uField = uField - uField.getVolumeAverage();
     }
 
     double computeSpectralDivergenceL2() {

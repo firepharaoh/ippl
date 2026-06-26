@@ -114,6 +114,7 @@ public:
 
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        this->logTgvVelocityDiagnostics("sfsl_tgv_velocity_error.csv");
 
         if (ippl::Comm->rank() == 0) {
             Inform m("debug ");
@@ -559,6 +560,9 @@ void clearVirtualParticles() {
 
         alvine::vtk::writeScalarField2D("data/SpectralFSL", "omega", this->fcontainer_m->getOmegaField(),
                                         this->rmin_m, this->hr_m, this->it_m);
+        alvine::vtk::writeVectorField2D("data/SpectralFSL/velocity", "velocity",
+                                        this->fcontainer_m->getUField(), this->rmin_m,
+                                        this->hr_m, this->it_m);
 
         IpplTimings::stopTimer(dumpTimer);
     }
@@ -623,6 +627,7 @@ void clearVirtualParticles() {
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->logCirculationDiagnostics(this->computeGridCirculation());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        this->logTgvVelocityDiagnostics("sfsl_tgv_velocity_error.csv");
         IpplTimings::stopTimer(SolveTimer);
     }
 };

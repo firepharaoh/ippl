@@ -286,6 +286,8 @@ public:
         auto R_old_view = pc->R_old.getView();
         auto omega_p    = pc->omega.getView();
         auto omega_g    = this->fcontainer_m->getOmegaField().getView();
+        auto P_view     = pc->P.getView();
+        auto u_g        = this->fcontainer_m->getUField().getView();
 
         Vector_t<double, Dim> rmin = this->rmin_m;
         Vector_t<double, Dim> hr   = this->hr_m;
@@ -318,10 +320,10 @@ public:
                 R_old_view(p) = R_view(p);
 
                 omega_p(p) = omega_g(li, lj) * Ap;
+                P_view(p) = u_g(li, lj);
             });
         Kokkos::fence();
 
-        this->spectralGather();
         bootstrap_next_push_m = true;
     }
 
@@ -558,11 +560,11 @@ public:
             IpplTimings::startTimer(SolveTimer);
             this->computeSpectralVelocityModes();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+            this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
             IpplTimings::stopTimer(SolveTimer);
 
-            IpplTimings::startTimer(grid2parTimer);
             remeshParticlesFromGrid();
-            IpplTimings::stopTimer(grid2parTimer);
         }
     }
 #include <memory>
@@ -621,11 +623,17 @@ public:
         // dump() runs after the particle push, so refresh the modes to make the
         // reconstructed fields consistent with the particle positions and step.
         this->spectralScatter();
+        this->computeSpectralVelocityModes();
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
 
         // alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
         //                                 this->fcontainer_m->getOmegaField(),
         //                                 this->rmin_m, this->hr_m, this->it_m);
+        alvine::vtk::writeVectorField2D("data/VortexInFourier/velocity", "velocity",
+                                        this->fcontainer_m->getUField(), this->rmin_m,
+                                        this->hr_m, this->it_m);
         const auto lengths = this->rmax_m - this->rmin_m;
         alvine::vtk::writeFourierMagnitudeField2D(
             "data/VortexInFourier/fourier", "omega_hat", this->omega_hat_m, lengths, this->it_m);
