@@ -302,8 +302,8 @@ public:
                 unsigned ix_global = ix_start + ix_local;
                 unsigned iy_global = iy_start + iy_local;
 
-                double x = xmin_global + (ix_global + 0.5) * dxp;
-                double y = ymin_global + (iy_global + 0.5) * dyp;
+                double x = xmin_global + (ix_global /*+ 0.5*/) * dxp;
+                double y = ymin_global + (iy_global /*+ 0.5*/) * dyp;
 
                 int grid_i = static_cast<int>(Kokkos::floor((x - rmin[0]) / hr[0]));
                 int grid_j = static_cast<int>(Kokkos::floor((y - rmin[1]) / hr[1]));
