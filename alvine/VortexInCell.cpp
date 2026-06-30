@@ -10,6 +10,8 @@
 //     stype    = Field solver type (FFT and CG supported)
 //     dump_freq= Dumping frequency of particle output
 //     remesh_freq= Remeshing frequency. Default 1 remeshes every step; 0 disables remeshing.
+//     --dt     = Optional timestep. Default 0.05.
+//     --method = Optional method label used in diagnostic CSV filenames. Default vic.
 //     ovfactor = Over-allocation factor for the buffers used in the communication. Typical
 //                values are 1.0, 2.0. Value 1.0 means no over-allocation.
 //     Example:
@@ -67,9 +69,26 @@ int main(int argc, char* argv[]) {
         if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
             remesh_freq = std::atoi(argv[arg++]);
         }
+        double dt = 0.05;
+        std::string method = "vic";
+        while (arg < static_cast<unsigned>(argc)) {
+            const std::string option = argv[arg++];
+            if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
+                dt = std::atof(argv[arg++]);
+            } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
+                method = argv[arg++];
+            } else if (option == "--dt") {
+                msg << "Missing value after --dt" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--method") {
+                msg << "Missing value after --method" << endl;
+                ippl::Comm->abort();
+            }
+        }
         
         msg << " Grid size: " << nr << " No. of particles: " << np
-            << " No. of time steps: " << nt << " Remesh frequency: " << remesh_freq << endl;
+            << " No. of time steps: " << nt << " dt: " << dt
+            << " Method: " << method << " Remesh frequency: " << remesh_freq << endl;
         
         // ===== CRITICAL: Create mesh and layout with proper MPI decomposition =====
         ippl::NDIndex<Dim> domain;
@@ -94,8 +113,8 @@ int main(int argc, char* argv[]) {
         FieldLayout_t<Dim> FL(MPI_COMM_WORLD, domain, isParallel, isAllPeriodic);
         
         // Now create manager WITH the layout info
-        VortexInCellManager<T, Dim, Band> manager(nt, nr, np, solver, dump_freq, remesh_freq,
-                                                   rmin, rmax, origin, FL, mesh);
+        VortexInCellManager<T, Dim, Band> manager(nt, nr, np, solver, dump_freq, remesh_freq, dt,
+                                                   method, rmin, rmax, origin, FL, mesh);
 
         manager.pre_run();
         manager.run(manager.getNt());

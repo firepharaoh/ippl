@@ -37,12 +37,14 @@ public:
     // Constructor declaration
     VortexInCellManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
                         std::string& solver_, int dump_freq_, int remesh_freq_ = 1,
+                        double dt_ = 0.05,
+                        std::string method_ = "vic",
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
-        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_) {
+        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -54,7 +56,8 @@ public:
     ~VortexInCellManager() {}
 
     void pre_run() override {
-        Inform csvout(NULL, "particles.csv", Inform::OVERWRITE);
+        const std::string particlesFile = this->diagnosticFileName("particles.csv");
+        Inform csvout(NULL, particlesFile.c_str(), Inform::OVERWRITE);
         csvout.precision(16);
         csvout.setf(std::ios::scientific, std::ios::floatfield);
 
@@ -72,9 +75,7 @@ public:
 
         this->hr_m = dr / this->nr_m;
 
-        // Courant condition
-        this->dt_m = 0.05;
-        // std::min(0.05, 0.5 * ( *std::min_element(this->hr_m.begin(), this->hr_m.end()) ) );
+        // dt_m is set from the command line by the executable constructor.
 
         this->it_m   = 0;
         this->time_m = 0.0;
@@ -344,8 +345,8 @@ public:
             this->energy_initialized_m = true;
 
             if (ippl::Comm->rank() == 0) {
-                std::ofstream out("energy.csv", std::ios::out);
-                out << "step,time,energy,rel_error,normalized_energy\n";
+                std::ofstream out(this->diagnosticFileName("energy.csv"), std::ios::out);
+                out << "method,dt,step,time,energy,rel_error,normalized_energy\n";
             }
             ippl::Comm->barrier();
         }
@@ -359,11 +360,12 @@ public:
             m << "kinetic energy = " << energy << ", relError = " << relErr
               << ", normalizedEnergy = " << normalizedEnergy << endl;
 
-            std::ofstream out("energy.csv", std::ios::app);
+            std::ofstream out(this->diagnosticFileName("energy.csv"), std::ios::app);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
-            out << this->it_m << "," << this->time_m << "," << energy << "," << relErr << ","
-                << normalizedEnergy << "\n";
+            out << this->method_m << "," << this->dt_m << "," << this->it_m << ","
+                << this->time_m << "," << energy << "," << relErr << "," << normalizedEnergy
+                << "\n";
         }
     }
 
@@ -375,8 +377,8 @@ public:
             this->enstrophy_initialized_m = true;
 
             if (ippl::Comm->rank() == 0) {
-                std::ofstream out("enstrophy.csv", std::ios::out);
-                out << "step,time,enstrophy,rel_error\n";
+                std::ofstream out(this->diagnosticFileName("enstrophy.csv"), std::ios::out);
+                out << "method,dt,step,time,enstrophy,rel_error\n";
             }
             ippl::Comm->barrier();
         }
@@ -387,11 +389,11 @@ public:
             Inform m("enstrophy ");
             m << "enstrophy = " << enstrophy << ", relError = " << relErr << endl;
 
-            std::ofstream out("enstrophy.csv", std::ios::app);
+            std::ofstream out(this->diagnosticFileName("enstrophy.csv"), std::ios::app);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
-            out << this->it_m << "," << this->time_m << "," << enstrophy << "," << relErr
-                << "\n";
+            out << this->method_m << "," << this->dt_m << "," << this->it_m << ","
+                << this->time_m << "," << enstrophy << "," << relErr << "\n";
         }
     }
 
@@ -402,16 +404,17 @@ public:
             Inform m("divergence ");
             m << "L2 = " << divL2 << endl;
 
-            std::ofstream out("divergence.csv", std::ios::app);
+            std::ofstream out(this->diagnosticFileName("divergence.csv"), std::ios::app);
 
             if (this->it_m == 0) {
-                out << "step,time,div_l2\n";
+                out << "method,dt,step,time,div_l2\n";
             }
 
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
 
-            out << this->it_m << "," << this->time_m << "," << divL2 << "\n";
+            out << this->method_m << "," << this->dt_m << "," << this->it_m << ","
+                << this->time_m << "," << divL2 << "\n";
         }
     }
     void advance() override {
@@ -495,7 +498,7 @@ public:
         Kokkos::deep_copy(omega_host, pc->omega.getView());
 
         std::stringstream fname;
-        fname << "particles_rank_" << ippl::Comm->rank() << ".csv";
+        fname << this->diagnosticFileName("particles_rank_") << ippl::Comm->rank() << ".csv";
 
         bool write_header = (this->it_m == 1);
 

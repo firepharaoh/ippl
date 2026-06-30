@@ -4,9 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cctype>
 #include <fstream>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "FieldContainer.hpp"
@@ -62,18 +66,21 @@ protected:
     bool isAllPeriodic_m;
     ippl::NDIndex<Dim> domain_m;
     std::string solver_m;
+    std::string method_m;
     int dump_freq_m;
 
 public:
     AlvineManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
-                  int dump_freq_)
+                  int dump_freq_, double dt_ = 0.05, std::string method_ = "alvine")
         : ippl::PicManager<T, Dim, ParticleContainer<T, Dim>, FieldContainer<T, Dim>,
                             LoadBalancer<T, Dim>>()
         , nt_m(nt_)
         , nr_m(nr_)
         , np_m(np_)
         , solver_m(solver_)
-        , dump_freq_m(dump_freq_) {}
+        , method_m(method_)
+        , dump_freq_m(dump_freq_)
+        , dt_m(dt_) {}
 
     ~AlvineManager() {}
 
@@ -102,6 +109,36 @@ public:
     void setNt(int nt_) { nt_m = nt_; }
 
     virtual void dump() { /* default does nothing */ };
+
+    std::string sanitizeFileToken(std::string token) const {
+        for (char& c : token) {
+            if (!std::isalnum(static_cast<unsigned char>(c))) {
+                c = '_';
+            }
+        }
+        return token;
+    }
+
+    std::string dtFileToken() const {
+        std::ostringstream os;
+        os << std::setprecision(12) << dt_m;
+        std::string token = os.str();
+
+        if (token.find('.') != std::string::npos) {
+            while (!token.empty() && token.back() == '0') {
+                token.pop_back();
+            }
+            if (!token.empty() && token.back() == '.') {
+                token.pop_back();
+            }
+        }
+
+        return sanitizeFileToken(token);
+    }
+
+    std::string diagnosticFileName(const std::string& baseName) const {
+        return sanitizeFileToken(method_m) + "_dt_" + dtFileToken() + "_" + baseName;
+    }
 
     void pre_step() override {}
 
@@ -236,8 +273,8 @@ public:
             circulation_initialized_m  = true;
 
             if (ippl::Comm->rank() == 0) {
-                std::ofstream out("circulation.csv", std::ios::out);
-                out << "step,time,circulation,rel_error,normalized_circulation\n";
+                std::ofstream out(diagnosticFileName("circulation.csv"), std::ios::out);
+                out << "method,dt,step,time,circulation,rel_error,normalized_circulation\n";
             }
             ippl::Comm->barrier();
         }
@@ -251,11 +288,11 @@ public:
             m << "circulation = " << circulation << ", relError = " << relError
               << ", normalizedCirculation = " << normalizedCirculation << endl;
 
-            std::ofstream out("circulation.csv", std::ios::app);
+            std::ofstream out(diagnosticFileName("circulation.csv"), std::ios::app);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
-            out << it_m << "," << time_m << "," << circulation << "," << relError << ","
-                << normalizedCirculation << "\n";
+            out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
+                << circulation << "," << relError << "," << normalizedCirculation << "\n";
         }
     }
 
@@ -418,17 +455,18 @@ public:
 
             if (ippl::Comm->rank() == 0) {
                 const bool firstWrite = !tgv_velocity_diagnostics_initialized_m;
-                std::ofstream out(filename, firstWrite ? std::ios::out : std::ios::app);
+                std::ofstream out(diagnosticFileName(filename),
+                                  firstWrite ? std::ios::out : std::ios::app);
                 out.precision(16);
                 out.setf(std::ios::scientific, std::ios::floatfield);
 
                 if (firstWrite) {
-                    out << "step,time,l2_error,l2_rel_error,linf_error,linf_rel_error,"
+                    out << "method,dt,step,time,l2_error,l2_rel_error,linf_error,linf_rel_error,"
                         << "opposite_sign_l2_error,opposite_sign_l2_rel_error,"
                         << "opposite_sign_linf_error,opposite_sign_linf_rel_error\n";
                 }
 
-                out << it_m << "," << time_m << ","
+                out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
                     << l2Error << "," << l2Error / l2Reference << ","
                     << globalLinf << "," << globalLinf / linfReference << ","
                     << l2OppositeError << "," << l2OppositeError / l2Reference << ","

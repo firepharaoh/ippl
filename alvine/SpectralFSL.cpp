@@ -1,6 +1,7 @@
 // Spectral Forward Semi-Lagrangian Test
 // Usage:
-//   srun ./SpectralFSL <nx> <ny> <Np_unused> <Nt> <stype> <dump_freq> --overallocate 1.0 --info 5
+//   srun ./SpectralFSL <nx> <ny> <Np_unused> <Nt> <stype> <dump_freq> [--dt value]
+//        [--method label] --overallocate 1.0 --info 5
 
 constexpr unsigned Dim = 2;
 using T                = double;
@@ -46,10 +47,27 @@ int main(int argc, char* argv[]) {
 
         std::string solver = argv[arg++];
         int dump_freq = std::atoi(argv[arg++]);
+        double dt = 0.05;
+        std::string method = "sfsl";
+        while (arg < static_cast<unsigned>(argc)) {
+            const std::string option = argv[arg++];
+            if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
+                dt = std::atof(argv[arg++]);
+            } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
+                method = argv[arg++];
+            } else if (option == "--dt") {
+                msg << "Missing value after --dt" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--method") {
+                msg << "Missing value after --method" << endl;
+                ippl::Comm->abort();
+            }
+        }
 
         msg << " Grid size: " << nr
             << " No. of virtual particles per step: " << nr[0] * nr[1]
-            << " No. of time steps: " << nt << endl;
+            << " No. of time steps: " << nt << " dt: " << dt
+            << " Method: " << method << endl;
 
         ippl::NDIndex<Dim> domain;
         for (unsigned i = 0; i < Dim; i++) {
@@ -76,6 +94,8 @@ int main(int argc, char* argv[]) {
             np,
             solver,
             dump_freq,
+            dt,
+            method,
             rmin,
             rmax,
             origin,
