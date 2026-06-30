@@ -638,6 +638,44 @@ public:
       spectralGather();
     }
 
+    void applyCellCenteredIfftPhase(ComplexField_t& modes) {
+      if constexpr (Dim == 2) {
+        auto view = modes.getView();
+
+        auto& layout       = modes.getLayout();
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const int nghost   = modes.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T pi   = std::acos(T(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "apply_cell_centered_ifft_phase",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(view.extent(0)) - nghost,
+                         static_cast<int>(view.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+
+              const T phase = pi * (T(mx) / T(Nx) + T(my) / T(Ny));
+              const Kokkos::complex<T> factor(Kokkos::cos(phase), Kokkos::sin(phase));
+
+              view(i, j) *= factor;
+            });
+        Kokkos::fence();
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::applyCellCenteredIfftPhase is implemented for 2D VIC only");
+      }
+    }
+
     void reconstructSpectralVorticity(RealField_t& omegaField) {
       if constexpr (Dim == 2) {
         if (!spectralFft_mp) {
@@ -653,6 +691,7 @@ public:
             (dx[0] * domain[0].length()) * (dx[1] * domain[1].length());
 
         omegaModes = omegaModes / area;
+        applyCellCenteredIfftPhase(omegaModes);
 
         spectralFft_mp->transform(ippl::BACKWARD, omegaModes);
 
@@ -685,6 +724,9 @@ public:
 
         auto uxModes = ux_hat_m.deepCopy();
         auto uyModes = uy_hat_m.deepCopy();
+
+        applyCellCenteredIfftPhase(uxModes);
+        applyCellCenteredIfftPhase(uyModes);
 
         spectralFft_mp->transform(ippl::BACKWARD, uxModes);
         spectralFft_mp->transform(ippl::BACKWARD, uyModes);
