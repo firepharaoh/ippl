@@ -516,6 +516,7 @@ public:
         // claculate stream function
         // TODO(VIF): replace with computeSpectralVelocityModes().
         IpplTimings::startTimer(SolveTimer);
+        this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
         IpplTimings::stopTimer(SolveTimer);
 
@@ -564,6 +565,7 @@ public:
             IpplTimings::stopTimer(par2gridTimer);
 
             IpplTimings::startTimer(SolveTimer);
+            this->Hou_Li_filter(this->omega_hat_m);
             this->computeSpectralVelocityModes();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
@@ -629,6 +631,7 @@ public:
         // dump() runs after the particle push, so refresh the modes to make the
         // reconstructed fields consistent with the particle positions and step.
         this->spectralScatter();
+        this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());

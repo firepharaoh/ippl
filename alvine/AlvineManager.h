@@ -714,6 +714,49 @@ public:
       }
     }
 
+    void Hou_Li_filter(ComplexField_t& modes, double alpha = 36.0, int exponent = 36) {
+      if constexpr (Dim == 2) {
+        auto view = modes.getView();
+
+        auto& layout       = modes.getLayout();
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const int nghost   = modes.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T kxMax = T(Nx) / T(2.0);
+        const T kyMax = T(Ny) / T(2.0);
+        const T invSqrtDim = T(1.0) / Kokkos::sqrt(T(2.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "hou_li_filter",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(view.extent(0)) - nghost,
+                         static_cast<int>(view.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const T kx = (gx <= Nx / 2) ? T(gx) : T(gx - Nx);
+              const T ky = (gy <= Ny / 2) ? T(gy) : T(gy - Ny);
+
+              const T etaX = Kokkos::abs(kx) / kxMax;
+              const T etaY = Kokkos::abs(ky) / kyMax;
+              const T eta  = Kokkos::sqrt(etaX * etaX + etaY * etaY) * invSqrtDim;
+              const T filterFactor =
+                  Kokkos::exp(-T(alpha) * Kokkos::pow(eta, exponent));
+
+              view(i, j) *= filterFactor;
+            });
+        Kokkos::fence();
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::Hou_Li_filter is implemented for 2D VIC only");
+      }
+    }
+
     void reconstructSpectralVorticity(RealField_t& omegaField) {
       if constexpr (Dim == 2) {
         if (!spectralFft_mp) {

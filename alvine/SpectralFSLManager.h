@@ -104,6 +104,7 @@ public:
 
         initializeVirtualParticles();
         this->spectralScatter();
+        this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
 
         logEnergyDiagnostics();
@@ -623,6 +624,7 @@ void clearVirtualParticles() {
         //clearVirtualParticles(); Instead of deleting temporary particles, we can reuse them in the next step to avoid unnecessary memory allocation and deallocation overhead.
         // 5. Compute the new vorticity field omega^{n+1} from the scattered particles
         IpplTimings::startTimer(SolveTimer);
+        this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
         logEnergyDiagnostics();
         logEnstrophyDiagnostics();
