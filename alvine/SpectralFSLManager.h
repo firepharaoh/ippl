@@ -106,6 +106,8 @@ public:
         this->spectralScatter();
         this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
+        this->Hou_Li_filter(this->ux_hat_m);
+        this->Hou_Li_filter(this->uy_hat_m);
 
         logEnergyDiagnostics();
         logEnstrophyDiagnostics();
@@ -626,6 +628,8 @@ void clearVirtualParticles() {
         IpplTimings::startTimer(SolveTimer);
         this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
+        this->Hou_Li_filter(this->ux_hat_m);
+        this->Hou_Li_filter(this->uy_hat_m);
         logEnergyDiagnostics();
         logEnstrophyDiagnostics();
         logVorticitySpectrum();

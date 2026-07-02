@@ -518,6 +518,8 @@ public:
         IpplTimings::startTimer(SolveTimer);
         this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
+        this->Hou_Li_filter(this->ux_hat_m);
+        this->Hou_Li_filter(this->uy_hat_m);
         IpplTimings::stopTimer(SolveTimer);
 
         // calculate velocity from stream function
@@ -567,6 +569,8 @@ public:
             IpplTimings::startTimer(SolveTimer);
             this->Hou_Li_filter(this->omega_hat_m);
             this->computeSpectralVelocityModes();
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
@@ -633,6 +637,8 @@ public:
         this->spectralScatter();
         this->Hou_Li_filter(this->omega_hat_m);
         this->computeSpectralVelocityModes();
+        this->Hou_Li_filter(this->ux_hat_m);
+        this->Hou_Li_filter(this->uy_hat_m);
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
         this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
