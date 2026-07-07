@@ -52,10 +52,10 @@ public:
     std::shared_ptr<Nufft_t> nufftType2_mp;
     std::shared_ptr<SpectralFft_t> spectralFft_mp;
 
-    ComplexField_t omega_hat_m;
-    ComplexField_t ux_hat_m;
-    ComplexField_t uy_hat_m;
-
+    ComplexField_t omega_hat_m; // Vorticity field in the Fourier domain
+    ComplexField_t ux_hat_m; //Velocity field in the Fourier domain x
+    ComplexField_t uy_hat_m; //Velocity field in the Fourier domain y
+    RealField_t Sk_m; //Shape function field 
 
 protected:
     unsigned nt_m;
@@ -68,7 +68,7 @@ protected:
     std::string solver_m;
     std::string method_m;
     int dump_freq_m;
-
+    int shapedegree_m = 1;// degree of the shape function for VIF, default is 1 (linear, CIC like)
 public:
     AlvineManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
                   int dump_freq_, double dt_ = 0.05, std::string method_ = "alvine")
@@ -173,6 +173,8 @@ public:
         omega_hat_m.initialize(mesh, FL);
         ux_hat_m.initialize(mesh, FL);
         uy_hat_m.initialize(mesh, FL);
+        Sk_m.initialize(mesh, FL);
+        initializeShapeFunctionVIF();
 
         ippl::ParameterList fftParams;
         fftParams.add("use_heffte_defaults", true);
@@ -757,6 +759,50 @@ public:
       }
     }
 
+    void initializeShapeFunctionVIF() { //Source is from InitializeShapeFunctionPIF in alpine/ChargedParticles.hpp
+        if constexpr (Dim == 2) {
+            using mdrange_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+            auto Skview = Sk_m.getView();
+            auto N = nr_m;
+            const int nghost = Sk_m.getNghost();
+            const auto& mesh = Sk_m.get_mesh();
+            const Vector_t<T, Dim> dx = mesh.getMeshSpacing();
+            const Vector_t<T, Dim> Len = rmax_m - rmin_m;
+            const T pi = T(3.141592653589793238462643383279502884);
+            const int order = shapedegree_m + 1;
+            const auto& layout = Sk_m.getLayout();
+            const auto& lDom = layout.getLocalNDIndex();
+            Kokkos::parallel_for(
+                "B-spline shape function initialization",
+                mdrange_type({nghost, nghost},
+                            {static_cast<int>(Skview.extent(0)) - nghost,
+                                static_cast<int>(Skview.extent(1)) - nghost}),
+                KOKKOS_LAMBDA(const int i, const int j) {
+                    Vector<int, Dim> iVec  = {i,j};
+                    for (unsigned d=0;d < Dim; d++) {
+                        iVec[d] = iVec[d] - nghost+lDom[d].first();
+                    }
+                    Vector<double, Dim> kVec;
+                    double Sk = 1.0;
+                    for (unsigned d=0;d < Dim; d++) {
+                        bool shift = (iVec[d] > (N[d]/2));
+                        kVec[d] = 2 * pi / Len[d] * (iVec[d] - shift * N[d]);
+                        double khbytwo = kVec[d] * dx[d] / 2.0;
+                        bool isNotZero = (khbytwo != 0.0);
+                        double factor = (1.0 / (khbytwo +((!isNotZero) *1.0))) ;
+                        double arg = isNotZero * (Kokkos::sin(khbytwo) * factor) + (!isNotZero) * 1.0;
+                        //Fourier Transform of B-spline of order n is (sin(kh/2)/(kh/2))^n, where h is the mesh spacing and k is the wavenumber
+                        Sk *= Kokkos::pow(arg, order);
+                    }
+                    Skview(i,j) = Sk;
+                }
+            );
+        } else {
+            throw std::runtime_error(
+                "AlvineManager::initializeShapeFunctionVIF is implemented for 2D VIC only");
+        }
+
+    }
     void reconstructSpectralVorticity(RealField_t& omegaField) {
       if constexpr (Dim == 2) {
         if (!spectralFft_mp) {
