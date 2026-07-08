@@ -12,6 +12,7 @@
 //     remesh_freq= Remeshing frequency. Default 0 disables remeshing.
 //     --dt     = Optional timestep. Default 0.05.
 //     --method = Optional method label used in diagnostic CSV filenames. Default vif.
+//     --filter = Optional spectral filter: 0 none, 1 shape function, 2 Hou-Li. Default 0.
 //     ovfactor = Over-allocation factor for the buffers used in the communication. Typical
 //                values are 1.0, 2.0. Value 1.0 means no over-allocation.
 //     Example:
@@ -71,24 +72,37 @@ int main(int argc, char* argv[]) {
         }
         double dt = 0.05;
         std::string method = "vif";
+        int spectral_filter = 0;
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
             if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
                 dt = std::atof(argv[arg++]);
             } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
                 method = argv[arg++];
+            } else if (option == "--filter" && arg < static_cast<unsigned>(argc)) {
+                spectral_filter = std::atoi(argv[arg++]);
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
             } else if (option == "--method") {
                 msg << "Missing value after --method" << endl;
                 ippl::Comm->abort();
+            } else if (option == "--filter") {
+                msg << "Missing value after --filter" << endl;
+                ippl::Comm->abort();
             }
+        }
+
+        if (spectral_filter < 0 || spectral_filter > 2) {
+            msg << "Invalid --filter value " << spectral_filter
+                << ". Use 0:no filter, 1:shape function, 2:Hou-Li." << endl;
+            ippl::Comm->abort();
         }
         
         msg << " Grid size: " << nr << " No. of particles: " << np
             << " No. of time steps: " << nt << " dt: " << dt
-            << " Method: " << method << " Remesh frequency: " << remesh_freq << endl;
+            << " Method: " << method << " Remesh frequency: " << remesh_freq
+            << " Spectral filter: " << spectral_filter << endl;
         
         // ===== CRITICAL: Create mesh and layout with proper MPI decomposition =====
         ippl::NDIndex<Dim> domain;
@@ -114,7 +128,8 @@ int main(int argc, char* argv[]) {
         
         // Now create manager WITH the layout info
         VortexInFourierManager<T, Dim, Band> manager(nt, nr, np, solver, dump_freq, remesh_freq,
-                                                   dt, method, rmin, rmax, origin, FL, mesh);
+                                                   dt, method, spectral_filter, rmin, rmax,
+                                                   origin, FL, mesh);
 
         manager.pre_run();
         manager.run(manager.getNt());

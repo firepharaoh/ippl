@@ -1,7 +1,7 @@
 // Spectral Forward Semi-Lagrangian Test
 // Usage:
 //   srun ./SpectralFSL <nx> <ny> <Np_unused> <Nt> <stype> <dump_freq> [--dt value]
-//        [--method label] --overallocate 1.0 --info 5
+//        [--method label] [--filter 0|1|2] --overallocate 1.0 --info 5
 
 constexpr unsigned Dim = 2;
 using T                = double;
@@ -49,25 +49,38 @@ int main(int argc, char* argv[]) {
         int dump_freq = std::atoi(argv[arg++]);
         double dt = 0.05;
         std::string method = "sfsl";
+        int spectral_filter = 0;
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
             if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
                 dt = std::atof(argv[arg++]);
             } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
                 method = argv[arg++];
+            } else if (option == "--filter" && arg < static_cast<unsigned>(argc)) {
+                spectral_filter = std::atoi(argv[arg++]);
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
             } else if (option == "--method") {
                 msg << "Missing value after --method" << endl;
                 ippl::Comm->abort();
+            } else if (option == "--filter") {
+                msg << "Missing value after --filter" << endl;
+                ippl::Comm->abort();
             }
+        }
+
+        if (spectral_filter < 0 || spectral_filter > 2) {
+            msg << "Invalid --filter value " << spectral_filter
+                << ". Use 0:no filter, 1:shape function, 2:Hou-Li." << endl;
+            ippl::Comm->abort();
         }
 
         msg << " Grid size: " << nr
             << " No. of virtual particles per step: " << nr[0] * nr[1]
             << " No. of time steps: " << nt << " dt: " << dt
-            << " Method: " << method << endl;
+            << " Method: " << method
+            << " Spectral filter: " << spectral_filter << endl;
 
         ippl::NDIndex<Dim> domain;
         for (unsigned i = 0; i < Dim; i++) {
@@ -96,6 +109,7 @@ int main(int argc, char* argv[]) {
             dump_freq,
             dt,
             method,
+            spectral_filter,
             rmin,
             rmax,
             origin,

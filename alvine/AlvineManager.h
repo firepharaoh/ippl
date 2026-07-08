@@ -68,10 +68,12 @@ protected:
     std::string solver_m;
     std::string method_m;
     int dump_freq_m;
+    int spectral_filter_m;
     int shapedegree_m = 1;// degree of the shape function for VIF, default is 1 (linear, CIC like)
 public:
     AlvineManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
-                  int dump_freq_, double dt_ = 0.05, std::string method_ = "alvine")
+                  int dump_freq_, double dt_ = 0.05, std::string method_ = "alvine",
+                  int spectral_filter_ = 0)
         : ippl::PicManager<T, Dim, ParticleContainer<T, Dim>, FieldContainer<T, Dim>,
                             LoadBalancer<T, Dim>>()
         , nt_m(nt_)
@@ -80,6 +82,7 @@ public:
         , solver_m(solver_)
         , method_m(method_)
         , dump_freq_m(dump_freq_)
+        , spectral_filter_m(spectral_filter_)
         , dt_m(dt_) {}
 
     ~AlvineManager() {}
@@ -107,6 +110,10 @@ public:
     int getNt() const { return nt_m; }
 
     void setNt(int nt_) { nt_m = nt_; }
+
+    bool useShapeFunctionFilter() const { return spectral_filter_m == 1; }
+
+    bool useHouLiFilter() const { return spectral_filter_m == 2; }
 
     virtual void dump() { /* default does nothing */ };
 
@@ -174,7 +181,9 @@ public:
         ux_hat_m.initialize(mesh, FL);
         uy_hat_m.initialize(mesh, FL);
         Sk_m.initialize(mesh, FL);
-        initializeShapeFunctionVIF();
+        if (useShapeFunctionFilter()) {
+            initializeShapeFunctionVIF();
+        }
 
         ippl::ParameterList fftParams;
         fftParams.add("use_heffte_defaults", true);
@@ -575,6 +584,22 @@ public:
             this->pcontainer_m->R,
             this->pcontainer_m->omega,
             omega_hat_m);
+
+        if (useShapeFunctionFilter()) {
+            auto omegaView = omega_hat_m.getView();
+            auto shapeView = Sk_m.getView();
+            const int nghost = omega_hat_m.getNghost();
+            using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+            Kokkos::parallel_for(
+                "Multiply with shape function in Fourier space",
+                policy_type({nghost, nghost},
+                            {static_cast<int>(omegaView.extent(0)) - nghost,
+                             static_cast<int>(omegaView.extent(1)) - nghost}),
+                KOKKOS_LAMBDA(const int i, const int j) {
+                  omegaView(i,j) *= shapeView(i,j);
+                });
+            Kokkos::fence();
+        }
       } else {
         throw std::runtime_error("AlvineManager::spectralScatter is implemented for 2D VIC only");
       }
@@ -652,8 +677,32 @@ public:
             pc.ux = 0.0;
             pc.uy = 0.0;
 
-            nufftType2_mp->transform(pc.R, pc.ux, ux_hat_m);
-            nufftType2_mp->transform(pc.R, pc.uy, uy_hat_m);
+            if (useShapeFunctionFilter()) {
+                auto uxModes = ux_hat_m.deepCopy();
+                auto uyModes = uy_hat_m.deepCopy();
+                auto uxModeView = uxModes.getView();
+                auto uyModeView = uyModes.getView();
+                auto shapeView = Sk_m.getView();
+                const int nghost = uxModes.getNghost();
+
+                using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+                Kokkos::parallel_for(
+                    "shape_spectral_velocity_modes",
+                    policy_type({nghost, nghost},
+                                {static_cast<int>(uxModeView.extent(0)) - nghost,
+                                 static_cast<int>(uxModeView.extent(1)) - nghost}),
+                    KOKKOS_LAMBDA(const int i, const int j) {
+                        uxModeView(i, j) *= shapeView(i, j);
+                        uyModeView(i, j) *= shapeView(i, j);
+                    });
+                Kokkos::fence();
+
+                nufftType2_mp->transform(pc.R, pc.ux, uxModes);
+                nufftType2_mp->transform(pc.R, pc.uy, uyModes);
+            } else {
+                nufftType2_mp->transform(pc.R, pc.ux, ux_hat_m);
+                nufftType2_mp->transform(pc.R, pc.uy, uy_hat_m);
+            }
 
             auto P       = pc.P.getView();
             auto ux      = pc.ux.getView();

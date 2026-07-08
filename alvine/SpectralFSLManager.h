@@ -38,12 +38,14 @@ public:
                         std::string& solver_, int dump_freq_,
                         double dt_ = 0.05,
                         std::string method_ = "sfsl",
+                        int spectral_filter_ = 0,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
-        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_) {
+        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
+                                spectral_filter_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -104,10 +106,14 @@ public:
 
         initializeVirtualParticles();
         this->spectralScatter();
-        this->Hou_Li_filter(this->omega_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_hat_m);
+        }
         this->computeSpectralVelocityModes();
-        this->Hou_Li_filter(this->ux_hat_m);
-        this->Hou_Li_filter(this->uy_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+        }
 
         logEnergyDiagnostics();
         logEnstrophyDiagnostics();
@@ -626,10 +632,14 @@ void clearVirtualParticles() {
         //clearVirtualParticles(); Instead of deleting temporary particles, we can reuse them in the next step to avoid unnecessary memory allocation and deallocation overhead.
         // 5. Compute the new vorticity field omega^{n+1} from the scattered particles
         IpplTimings::startTimer(SolveTimer);
-        this->Hou_Li_filter(this->omega_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_hat_m);
+        }
         this->computeSpectralVelocityModes();
-        this->Hou_Li_filter(this->ux_hat_m);
-        this->Hou_Li_filter(this->uy_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+        }
         logEnergyDiagnostics();
         logEnstrophyDiagnostics();
         logVorticitySpectrum();

@@ -40,12 +40,14 @@ public:
                         std::string& solver_, int dump_freq_, int remesh_freq_ = 0,
                         double dt_ = 0.05,
                         std::string method_ = "vif",
+                        int spectral_filter_ = 0,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
-        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_) {
+        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
+                                spectral_filter_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -516,10 +518,14 @@ public:
         // claculate stream function
         // TODO(VIF): replace with computeSpectralVelocityModes().
         IpplTimings::startTimer(SolveTimer);
-        this->Hou_Li_filter(this->omega_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_hat_m);
+        }
         this->computeSpectralVelocityModes();
-        this->Hou_Li_filter(this->ux_hat_m);
-        this->Hou_Li_filter(this->uy_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+        }
         IpplTimings::stopTimer(SolveTimer);
 
         // calculate velocity from stream function
@@ -567,10 +573,14 @@ public:
             IpplTimings::stopTimer(par2gridTimer);
 
             IpplTimings::startTimer(SolveTimer);
-            this->Hou_Li_filter(this->omega_hat_m);
+            if (this->useHouLiFilter()) {
+                this->Hou_Li_filter(this->omega_hat_m);
+            }
             this->computeSpectralVelocityModes();
-            this->Hou_Li_filter(this->ux_hat_m);
-            this->Hou_Li_filter(this->uy_hat_m);
+            if (this->useHouLiFilter()) {
+                this->Hou_Li_filter(this->ux_hat_m);
+                this->Hou_Li_filter(this->uy_hat_m);
+            }
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
@@ -635,10 +645,14 @@ public:
         // dump() runs after the particle push, so refresh the modes to make the
         // reconstructed fields consistent with the particle positions and step.
         this->spectralScatter();
-        this->Hou_Li_filter(this->omega_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_hat_m);
+        }
         this->computeSpectralVelocityModes();
-        this->Hou_Li_filter(this->ux_hat_m);
-        this->Hou_Li_filter(this->uy_hat_m);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+        }
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
         this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
