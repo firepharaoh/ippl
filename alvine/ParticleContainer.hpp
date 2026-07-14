@@ -16,6 +16,7 @@ class ParticleContainer : public ippl::ParticleBase<ippl::ParticleSpatialLayout<
         ippl::ParticleAttrib<T> ux;
         ippl::ParticleAttrib<T> uy;
         typename Base::particle_position_type R_old;
+        ippl::ParticleAttrib<T> viscosity;//Viscosity attribute for particles  
 
     private:
         PLayout_t<T, Dim> pl_m;
@@ -40,6 +41,7 @@ class ParticleContainer : public ippl::ParticleBase<ippl::ParticleSpatialLayout<
         this->addAttribute(ux);
         this->addAttribute(uy);
         this->addAttribute(R_old);
+        this->addAttribute(viscosity); // Register the viscosity attribute
 	}
 	void setupBCs() { setBCAllPeriodic(); }
 

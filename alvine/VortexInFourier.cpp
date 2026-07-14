@@ -73,6 +73,7 @@ int main(int argc, char* argv[]) {
         double dt = 0.05;
         std::string method = "vif";
         int spectral_filter = 0;
+        double viscosity = 0.0;
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
             if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
@@ -90,6 +91,18 @@ int main(int argc, char* argv[]) {
             } else if (option == "--filter") {
                 msg << "Missing value after --filter" << endl;
                 ippl::Comm->abort();
+            } else if (option == "--viscosity" && arg < static_cast<unsigned>(argc)) {
+                viscosity = std::atof(argv[arg++]);
+                if(viscosity < 0.0) {
+                    msg << "Viscosity must be non-negative." << endl;
+                    ippl::Comm->abort();
+                }
+            } else if (option == "--viscosity") {
+                msg << "Missing value after --viscosity" << endl;
+                ippl::Comm->abort();
+            } else {
+                msg << "Unknown option: " << option << endl;
+                ippl::Comm->abort();
             }
         }
 
@@ -102,7 +115,8 @@ int main(int argc, char* argv[]) {
         msg << " Grid size: " << nr << " No. of particles: " << np
             << " No. of time steps: " << nt << " dt: " << dt
             << " Method: " << method << " Remesh frequency: " << remesh_freq
-            << " Spectral filter: " << spectral_filter << endl;
+            << " Spectral filter: " << spectral_filter
+            << " viscosity: " << viscosity << endl;
         
         // ===== CRITICAL: Create mesh and layout with proper MPI decomposition =====
         ippl::NDIndex<Dim> domain;
@@ -128,8 +142,8 @@ int main(int argc, char* argv[]) {
         
         // Now create manager WITH the layout info
         VortexInFourierManager<T, Dim, Band> manager(nt, nr, np, solver, dump_freq, remesh_freq,
-                                                   dt, method, spectral_filter, rmin, rmax,
-                                                   origin, FL, mesh);
+                                                   dt, method, spectral_filter, viscosity,
+                                                   rmin, rmax, origin, FL, mesh);
 
         manager.pre_run();
         manager.run(manager.getNt());

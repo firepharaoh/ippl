@@ -41,13 +41,14 @@ public:
                         double dt_ = 0.05,
                         std::string method_ = "vif",
                         int spectral_filter_ = 0,
+                        double viscosity_ = 0.0,
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
         : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
-                                spectral_filter_) {
+                                spectral_filter_, viscosity_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -545,6 +546,14 @@ public:
         IpplTimings::startTimer(grid2parTimer);
         this->spectralGather();
         IpplTimings::stopTimer(grid2parTimer);
+
+        if (this->viscosity_m > 0.0) {
+            auto visc_hat = this->omega_hat_m.deepCopy();
+
+            this->computeSpectralViscosity(visc_hat);
+            this->spectralGatherViscosity(visc_hat);
+            this->updateParticleVorticityViscosity();
+        }
 
         // drift
         IpplTimings::startTimer(RTimer);

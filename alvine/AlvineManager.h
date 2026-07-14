@@ -56,6 +56,7 @@ public:
     ComplexField_t ux_hat_m; //Velocity field in the Fourier domain x
     ComplexField_t uy_hat_m; //Velocity field in the Fourier domain y
     RealField_t Sk_m; //Shape function field 
+    //ComplexField_t viscousFilter_m; //Viscous filter field
 
 protected:
     unsigned nt_m;
@@ -70,10 +71,12 @@ protected:
     int dump_freq_m;
     int spectral_filter_m;
     int shapedegree_m = 1;// degree of the shape function for VIF, default is 1 (linear, CIC like)
+    double viscosity_m; //Viscosity for the viscous filter, default is 0.0 (no viscosity)
+
 public:
     AlvineManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
                   int dump_freq_, double dt_ = 0.05, std::string method_ = "alvine",
-                  int spectral_filter_ = 0)
+                  int spectral_filter_ = 0 , double viscosity= 0.0)
         : ippl::PicManager<T, Dim, ParticleContainer<T, Dim>, FieldContainer<T, Dim>,
                             LoadBalancer<T, Dim>>()
         , nt_m(nt_)
@@ -83,6 +86,7 @@ public:
         , method_m(method_)
         , dump_freq_m(dump_freq_)
         , spectral_filter_m(spectral_filter_)
+        , viscosity_m(viscosity)
         , dt_m(dt_) {}
 
     ~AlvineManager() {}
@@ -720,7 +724,19 @@ public:
             throw std::runtime_error("AlvineManager::spectralGather is implemented for 2D VIC only");
         }
     }
-
+    void spectralGatherViscosity(ComplexField_t& visc_hat) {
+        if constexpr (Dim == 2) {
+            if(!nufftType2_mp){
+                throw std::runtime_error("spectralGatherViscosity called before initNUFFT");
+            }
+            auto & pc = *this->pcontainer_m;
+            pc.viscosity = 0.0;
+            nufftType2_mp->transform(pc.R, pc.viscosity, visc_hat);
+            Kokkos::fence();
+        } else {
+            throw std::runtime_error("AlvineManager::spectralGatherViscosity is implemented for 2D VIC only");
+        }
+    }
     void spectralSolveParticles() {
       spectralScatter();
       computeSpectralVelocityModes();
@@ -851,6 +867,69 @@ public:
                 "AlvineManager::initializeShapeFunctionVIF is implemented for 2D VIC only");
         }
 
+    }
+    void computeSpectralViscosity(ComplexField_t& visc_hat){
+      if constexpr (Dim == 2) {
+        auto omega = omega_hat_m.getView();
+        auto visc  = visc_hat.getView();
+        
+        auto& layout = omega_hat_m.getLayout();
+        auto& mesh   = omega_hat_m.get_mesh();
+
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = omega_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx   = dx[0] * Nx;
+        const T Ly   = dx[1] * Ny;
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "Compute spectral viscosity",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(omega.extent(0)) - nghost,
+                         static_cast<int>(omega.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const T laplaceKx = twoPi * mx / Lx;
+                const T laplaceKy = twoPi * my / Ly;
+                const T k2 = laplaceKx * laplaceKx + laplaceKy * laplaceKy;
+                const bool isNotZero = (k2 != T(0));
+                visc(i, j) = -T(isNotZero) * viscosity_m * k2 * omega(i, j);
+            });
+        Kokkos::fence();
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::computeSpectralViscosity is implemented for 2D VIF only");
+      }
+    }
+
+    void updateParticleVorticityViscosity(){
+        if constexpr (Dim == 2) {
+            // Implementation for 2D
+            auto& pc = *this->pcontainer_m;
+            auto omega = pc.omega.getView();
+            auto visc = pc.viscosity.getView();
+            const auto n = pc.getLocalNum();
+            const T dt = dt_m;
+            Kokkos::parallel_for(
+                "update_particle_vorticity_viscosity",
+                n,
+                KOKKOS_LAMBDA(const size_t i){
+                    omega(i) += dt * visc(i);
+                });
+            Kokkos::fence();
+        } else {
+            throw std::runtime_error("AlvineManager::updateParticleVorticityViscosity is implemented for 2D only");
+        }
     }
     void reconstructSpectralVorticity(RealField_t& omegaField) {
       if constexpr (Dim == 2) {

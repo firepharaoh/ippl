@@ -574,9 +574,6 @@ void clearVirtualParticles() {
 
         alvine::vtk::writeScalarField2D("data/SpectralFSL", "omega", this->fcontainer_m->getOmegaField(),
                                         this->rmin_m, this->hr_m, this->it_m);
-        alvine::vtk::writeVectorField2D("data/SpectralFSL/velocity", "velocity",
-                                        this->fcontainer_m->getUField(), this->rmin_m,
-                                        this->hr_m, this->it_m);
 
         IpplTimings::stopTimer(dumpTimer);
     }
