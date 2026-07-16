@@ -100,6 +100,12 @@ int main(int argc, char* argv[]) {
             } else if (option == "--viscosity") {
                 msg << "Missing value after --viscosity" << endl;
                 ippl::Comm->abort();
+            } else if ((option == "--overallocate" || option == "-b" || option == "--info"
+                        || option == "-i" || option == "--timer-fences")
+                       && arg < static_cast<unsigned>(argc)) {
+                ++arg;
+            } else if (option == "--debug" || option == "-g") {
+                // Already handled by ippl::initialize().
             } else {
                 msg << "Unknown option: " << option << endl;
                 ippl::Comm->abort();
