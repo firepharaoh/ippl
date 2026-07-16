@@ -914,17 +914,23 @@ public:
 
     void updateParticleVorticityViscosity(){
         if constexpr (Dim == 2) {
-            // Implementation for 2D
             auto& pc = *this->pcontainer_m;
             auto omega = pc.omega.getView();
             auto visc = pc.viscosity.getView();
             const auto n = pc.getLocalNum();
             const T dt = dt_m;
+
+            const unsigned nxp_global = static_cast<unsigned>(std::sqrt(this->np_m));
+            const unsigned nyp_global = this->np_m / nxp_global;
+            const T dxp = (this->rmax_m[0] - this->rmin_m[0]) / nxp_global;
+            const T dyp = (this->rmax_m[1] - this->rmin_m[1]) / nyp_global;
+            const T particleArea = dxp * dyp;
+
             Kokkos::parallel_for(
                 "update_particle_vorticity_viscosity",
                 n,
                 KOKKOS_LAMBDA(const size_t i){
-                    omega(i) += dt * visc(i);
+                    omega(i) += dt * visc(i) * particleArea;
                 });
             Kokkos::fence();
         } else {
