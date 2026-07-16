@@ -885,6 +885,7 @@ public:
         const int Ny = domain[1].length();
         const T Lx   = dx[0] * Nx;
         const T Ly   = dx[1] * Ny;
+        const T area = Lx * Ly;
 
         const T twoPi = T(2.0 * std::acos(-1.0));
 
@@ -903,7 +904,7 @@ public:
                 const T laplaceKy = twoPi * my / Ly;
                 const T k2 = laplaceKx * laplaceKx + laplaceKy * laplaceKy;
                 const bool isNotZero = (k2 != T(0));
-                visc(i, j) = -T(isNotZero) * viscosity_m * k2 * omega(i, j);
+                visc(i, j) = -T(isNotZero) * viscosity_m * k2 * omega(i, j) / area;
             });
         Kokkos::fence();
       } else {
