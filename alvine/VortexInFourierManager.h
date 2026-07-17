@@ -548,10 +548,9 @@ public:
         IpplTimings::stopTimer(grid2parTimer);
 
         if (this->viscosity_m > 0.0) {
-            auto visc_hat = this->omega_hat_m.deepCopy();
-
-            this->computeSpectralViscosity(visc_hat);
-            this->spectralGatherViscosity(visc_hat);
+            this->viscosity_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->computeSpectralViscosity(this->viscosity_hat_m);
+            this->spectralGatherViscosity(this->viscosity_hat_m);
             this->updateParticleVorticityViscosity();
         }
 

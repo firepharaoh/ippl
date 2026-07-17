@@ -55,8 +55,8 @@ public:
     ComplexField_t omega_hat_m; // Vorticity field in the Fourier domain
     ComplexField_t ux_hat_m; //Velocity field in the Fourier domain x
     ComplexField_t uy_hat_m; //Velocity field in the Fourier domain y
+    ComplexField_t viscosity_hat_m; // Viscosity tendency in the Fourier domain
     RealField_t Sk_m; //Shape function field 
-    //ComplexField_t viscousFilter_m; //Viscous filter field
 
 protected:
     unsigned nt_m;
@@ -184,6 +184,7 @@ public:
         omega_hat_m.initialize(mesh, FL);
         ux_hat_m.initialize(mesh, FL);
         uy_hat_m.initialize(mesh, FL);
+        viscosity_hat_m.initialize(mesh, FL);
         Sk_m.initialize(mesh, FL);
         if (useShapeFunctionFilter()) {
             initializeShapeFunctionVIF();
