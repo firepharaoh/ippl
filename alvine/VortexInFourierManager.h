@@ -665,15 +665,16 @@ public:
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
         this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
 
-        // alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
-        //                                 this->fcontainer_m->getOmegaField(),
-        //                                 this->rmin_m, this->hr_m, this->it_m);
-        alvine::vtk::writeVectorField2D("data/VortexInFourier/velocity", "velocity",
-                                        this->fcontainer_m->getUField(), this->rmin_m,
-                                        this->hr_m, this->it_m);
-        const auto lengths = this->rmax_m - this->rmin_m;
-        alvine::vtk::writeFourierMagnitudeField2D(
-            "data/VortexInFourier/fourier", "omega_hat", this->omega_hat_m, lengths, this->it_m);
+        alvine::vtk::writeScalarField2D("data/VortexInFourier", "omega",
+                                        this->fcontainer_m->getOmegaField(),
+                                        this->rmin_m, this->hr_m, this->it_m);
+        // alvine::vtk::writeVectorField2D("data/VortexInFourier/velocity", "velocity",
+        //                                 this->fcontainer_m->getUField(), this->rmin_m,
+        //                                 this->hr_m, this->it_m);
+        // const auto lengths = this->rmax_m - this->rmin_m;
+        // alvine::vtk::writeFourierMagnitudeField2D(
+        //     "data/VortexInFourier/fourier", "omega_hat", this->omega_hat_m, lengths,
+        //     this->it_m);
 
         IpplTimings::stopTimer(dumpTimer);
     }
