@@ -18,6 +18,7 @@ add_executable (VortexInCell VortexInCell.cpp)
 add_executable (VortexInFourier VortexInFourier.cpp)
 add_executable(Fsl Fsl.cpp)
 add_executable(SpectralFSL SpectralFSL.cpp)
+add_executable(PerfectInviscid2D PerfectInviscid2D.cpp)
 target_include_directories(VortexInCell PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(VortexInCell ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
@@ -29,6 +30,9 @@ target_link_libraries(SpectralFSL ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 target_include_directories(VortexInFourier PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(VortexInFourier ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
+
+target_include_directories(PerfectInviscid2D PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
+target_link_libraries(PerfectInviscid2D ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 # vi: set et ts=4 sw=4 sts=4:
 

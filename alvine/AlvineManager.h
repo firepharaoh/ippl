@@ -498,6 +498,30 @@ public:
         }
     }
 
+    double computeRelativeL2VorticityError(Field<T, Dim>& omegaNum){
+        
+        auto& omegaField = this->fcontainer_m->getOmegaField();
+        auto omega_view = omegaField.getView();
+        auto omegaNum_view = omegaNum.getView();
+        Field<T, Dim> omegaExact;
+        Field<T, Dim> omegaError;
+
+        omegaExact.initialize(this->fcontainer_m->getMesh(), this->fcontainer_m->getFL());
+        omegaError.initialize(this->fcontainer_m->getMesh(), this->fcontainer_m->getFL());
+
+        omegaExact = 0.0;
+        omegaError = 0.0;
+        this->exactVorticity(omegaExact);
+
+        omegaError = omegaNum - omegaExact;
+
+        double errorNorm = norm(omegaError, 2);
+        double exactNorm = norm(omegaExact, 2);
+
+        return errorNorm / std::max(exactNorm, 1e-30);
+       
+    } 
+
     void checkEnergyConservation(double energy, double relError, Inform& m) {
         if (ippl::Comm->rank() == 0) {
             m << "kinetic energy = " << energy << ", relError = " << relError << endl;
@@ -1257,5 +1281,6 @@ public:
                 "AlvineManager::computeSpectralVorticitySpectrum is implemented for 2D VIC only");
         }
     }
+
 };
 #endif
