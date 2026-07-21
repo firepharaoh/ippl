@@ -9,6 +9,7 @@
 #include "FieldSolver.hpp"
 #include "LoadBalancer.hpp"
 #include "ParticleContainer.hpp"
+#include "VtkDump.hpp"
 
 template <typename T, unsigned Dim>
 class PerfectInviscid2DManager : public AlvineManager<T, Dim> {
@@ -134,7 +135,21 @@ public:
 
     void grid2par() override {}
 
-    void dump() override {}
+  void dump() override {
+      static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
+      IpplTimings::startTimer(dumpTimer);
+
+      alvine::vtk::writeScalarField2D(
+          "data/PerfectInviscid2D",
+          "omega",
+          this->fcontainer_m->getOmegaField(),
+          this->rmin_m,
+          this->hr_m,
+          this->it_m);
+
+      IpplTimings::stopTimer(dumpTimer);
+  }
+
 };
 
 #endif

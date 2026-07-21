@@ -85,8 +85,7 @@ int main(int argc, char* argv[]) {
 
         manager.pre_run();
 
-        msg << " Perfect 2D inviscid manager initialized; no physics step is implemented yet."
-            << endl;
+        manager.dump();
 
         IpplTimings::stopTimer(mainTimer);
         IpplTimings::print();
