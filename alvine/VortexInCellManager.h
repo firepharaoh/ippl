@@ -104,6 +104,8 @@ public:
 
         initializeParticles();
         this->pcontainer_m->R_old = this->pcontainer_m->R;
+        this->par2grid();
+        this->logTgvVorticityDiagnostics();
     }
 
     void initializeParticles() {
@@ -435,6 +437,7 @@ public:
         IpplTimings::startTimer(par2gridTimer);
         this->par2grid();
         IpplTimings::stopTimer(par2gridTimer);
+        this->logTgvVorticityDiagnostics();
         auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
 
         // claculate stream function

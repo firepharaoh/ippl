@@ -105,6 +105,7 @@ protected:
     double circulation0_m = 0.0;
     bool circulation_initialized_m = false;
     bool tgv_velocity_diagnostics_initialized_m = false;
+    bool tgv_vorticity_diagnostics_initialized_m = false;
 
 public:
     double getTime() { return time_m; }
@@ -498,6 +499,28 @@ public:
         }
     }
 
+    void logTgvVorticityDiagnostics(const std::string& filename = "tgv_vorticity_error.csv") {
+        double relL2Error = computeRelativeL2VorticityError(this->fcontainer_m->getOmegaField());
+
+        if (ippl::Comm->rank() == 0) {
+            const bool firstWrite = !tgv_vorticity_diagnostics_initialized_m;
+            std::ofstream out(diagnosticFileName(filename),
+                              firstWrite ? std::ios::out : std::ios::app);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+
+            if (firstWrite) {
+                out << "method,dt,step,time,rel_l2_error\n";
+            }
+
+            out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
+                << relL2Error << "\n";
+
+            Inform m("tgv_vorticity_error ");
+            m << "relL2Error = " << relL2Error << endl;
+        }
+        tgv_vorticity_diagnostics_initialized_m = true;
+    }
     double computeRelativeL2VorticityError(Field<T, Dim>& omegaNum){
         
         auto& omegaField = this->fcontainer_m->getOmegaField();
@@ -511,7 +534,7 @@ public:
 
         omegaExact = 0.0;
         omegaError = 0.0;
-        this->exactVorticity(omegaExact);
+        this->fillExactTGVVorticity(omegaExact);
 
         omegaError = omegaNum - omegaExact;
 
