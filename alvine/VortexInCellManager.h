@@ -39,12 +39,14 @@ public:
                         std::string& solver_, int dump_freq_, int remesh_freq_ = 1,
                         double dt_ = 0.05,
                         std::string method_ = "vic",
+                        std::string time_integrator_ = "leapfrog",
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
-        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_) {
+        : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_, 0, 0.0,
+                                time_integrator_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -420,7 +422,110 @@ public:
         }
     }
     void advance() override {
-        LeapFrogStep();
+        if (this->useRK4()) {
+            RK4Step();
+        } else {
+            LeapFrogStep();
+        }
+    }
+
+    void computeParticleVelocityFromGridVorticity(bool diagnostics) {
+        static IpplTimings::TimerRef PTimer     = IpplTimings::getTimer("pushVelocity");
+        static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
+        static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("grid2par");
+
+        IpplTimings::startTimer(par2gridTimer);
+        this->par2grid();
+        IpplTimings::stopTimer(par2gridTimer);
+
+        if (diagnostics) {
+            this->logTgvVorticityDiagnostics();
+        }
+
+        auto omega_n = this->fcontainer_m->getOmegaField().deepCopy();
+
+        IpplTimings::startTimer(SolveTimer);
+        this->fsolver_m->runSolver();
+        IpplTimings::stopTimer(SolveTimer);
+
+        IpplTimings::startTimer(PTimer);
+        this->computeVelocityField();
+        if (diagnostics) {
+            logEnergyDiagnostics();
+            Kokkos::deep_copy(this->fcontainer_m->getOmegaField().getView(), omega_n.getView());
+            logEnstrophyDiagnostics();
+            this->logCirculationDiagnostics(this->computeParticleCirculation());
+            logDivergenceDiagnostics();
+        }
+        IpplTimings::stopTimer(PTimer);
+
+        IpplTimings::startTimer(grid2parTimer);
+        this->grid2par();
+        IpplTimings::stopTimer(grid2parTimer);
+    }
+
+    void RK4Step() {
+        static IpplTimings::TimerRef RTimer = IpplTimings::getTimer("rk4PushPosition");
+        static IpplTimings::TimerRef updateTimer = IpplTimings::getTimer("update");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
+
+        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
+        const T dt = this->dt_m;
+
+        pc->rk4_R0 = pc->R;
+
+        computeParticleVelocityFromGridVorticity(true);
+        pc->rk4_k1 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k1;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeParticleVelocityFromGridVorticity(false);
+        pc->rk4_k2 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k2;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeParticleVelocityFromGridVorticity(false);
+        pc->rk4_k3 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeParticleVelocityFromGridVorticity(false);
+        pc->rk4_k4 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R_old = pc->rk4_R0;
+        pc->R = pc->rk4_R0 + (dt / 6.0) *
+                              (pc->rk4_k1 + 2.0 * pc->rk4_k2 + 2.0 * pc->rk4_k3 + pc->rk4_k4);
+        bootstrap_next_push_m = true;
+        IpplTimings::stopTimer(RTimer);
+
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            IpplTimings::startTimer(par2gridTimer);
+            this->par2grid();
+            remeshParticlesFromGrid();
+            IpplTimings::stopTimer(par2gridTimer);
+            bootstrap_next_push_m = true;
+        }
     }
 
     void LeapFrogStep() {

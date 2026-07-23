@@ -68,6 +68,7 @@ protected:
     ippl::NDIndex<Dim> domain_m;
     std::string solver_m;
     std::string method_m;
+    std::string time_integrator_m;
     int dump_freq_m;
     int spectral_filter_m;
     int shapedegree_m = 1;// degree of the shape function for VIF, default is 1 (linear, CIC like)
@@ -76,7 +77,8 @@ protected:
 public:
     AlvineManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
                   int dump_freq_, double dt_ = 0.05, std::string method_ = "alvine",
-                  int spectral_filter_ = 0 , double viscosity= 0.0)
+                  int spectral_filter_ = 0 , double viscosity= 0.0,
+                  std::string time_integrator_ = "leapfrog")
         : ippl::PicManager<T, Dim, ParticleContainer<T, Dim>, FieldContainer<T, Dim>,
                             LoadBalancer<T, Dim>>()
         , nt_m(nt_)
@@ -84,6 +86,7 @@ public:
         , np_m(np_)
         , solver_m(solver_)
         , method_m(method_)
+        , time_integrator_m(time_integrator_)
         , dump_freq_m(dump_freq_)
         , spectral_filter_m(spectral_filter_)
         , viscosity_m(viscosity)
@@ -119,6 +122,10 @@ public:
     bool useShapeFunctionFilter() const { return spectral_filter_m == 1; }
 
     bool useHouLiFilter() const { return spectral_filter_m == 2; }
+
+    bool useRK4() const { return time_integrator_m == "rk4"; }
+
+    bool useLeapFrog() const { return time_integrator_m == "leapfrog"; }
 
     virtual void dump() { /* default does nothing */ };
 

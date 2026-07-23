@@ -39,13 +39,14 @@ public:
                         double dt_ = 0.05,
                         std::string method_ = "sfsl",
                         int spectral_filter_ = 0,
+                        std::string time_integrator_ = "leapfrog",
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
         : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
-                                spectral_filter_) {
+                                spectral_filter_, 0.0, time_integrator_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -598,7 +599,74 @@ void clearVirtualParticles() {
     }
 
     void advance() override {
-        advectForward();
+        if (this->useRK4()) {
+            advectForwardRK4();
+        } else {
+            advectForward();
+        }
+    }
+
+    void pushVirtualParticlesForwardRK4() {
+        auto pc = this->pcontainer_m;
+        const T dt = this->dt_m;
+
+        pc->rk4_R0 = pc->R;
+        pc->rk4_k1 = pc->P;
+
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k1;
+        pc->update();
+        this->spectralGather();
+        pc->rk4_k2 = pc->P;
+
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k2;
+        pc->update();
+        this->spectralGather();
+        pc->rk4_k3 = pc->P;
+
+        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
+        pc->update();
+        this->spectralGather();
+        pc->rk4_k4 = pc->P;
+
+        pc->R = pc->rk4_R0 + (dt / 6.0) *
+                              (pc->rk4_k1 + 2.0 * pc->rk4_k2 + 2.0 * pc->rk4_k3 + pc->rk4_k4);
+        pc->update();
+    }
+
+    void advectForwardRK4() {
+        static IpplTimings::TimerRef RTimer        = IpplTimings::getTimer("rk4PushPosition");
+        static IpplTimings::TimerRef SolveTimer    = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
+
+        initializeVirtualParticles();
+
+        IpplTimings::startTimer(RTimer);
+        pushVirtualParticlesForwardRK4();
+        IpplTimings::stopTimer(RTimer);
+
+        IpplTimings::startTimer(par2gridTimer);
+        this->spectralScatter();
+        IpplTimings::stopTimer(par2gridTimer);
+
+        IpplTimings::startTimer(SolveTimer);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_hat_m);
+        }
+        this->computeSpectralVelocityModes();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+        }
+        logEnergyDiagnostics();
+        logEnstrophyDiagnostics();
+        logVorticitySpectrum();
+        logDivergenceDiagnostics();
+
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        this->logCirculationDiagnostics(this->computeGridCirculation());
+        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        this->logTgvVelocityDiagnostics("sfsl_tgv_velocity_error.csv");
+        IpplTimings::stopTimer(SolveTimer);
     }
 
     void advectForward() {

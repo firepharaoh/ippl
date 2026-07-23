@@ -1,7 +1,7 @@
 // Forward Semi-Lagrangian Test
 // Usage:
 //   srun ./FSL <nx> <ny> <Np_unused> <Nt> <stype> <dump_freq> [--dt value]
-//        [--method label] --overallocate 1.0 --info 5
+//        [--method label] [--integrator leapfrog|rk4] --overallocate 1.0 --info 5
 
 constexpr unsigned Dim = 2;
 using T                = double;
@@ -9,6 +9,8 @@ const char* TestName   = "FSL";
 
 #include "Ippl.h"
 
+#include <algorithm>
+#include <cctype>
 #include <Kokkos_MathematicalFunctions.hpp>
 #include <Kokkos_Random.hpp>
 #include <chrono>
@@ -49,25 +51,41 @@ int main(int argc, char* argv[]) {
         int dump_freq = std::atoi(argv[arg++]);
         double dt = 0.05;
         std::string method = "fsl";
+        std::string time_integrator = "leapfrog";
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
             if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
                 dt = std::atof(argv[arg++]);
             } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
                 method = argv[arg++];
+            } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
+                time_integrator = argv[arg++];
+                std::transform(time_integrator.begin(), time_integrator.end(),
+                               time_integrator.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
             } else if (option == "--method") {
                 msg << "Missing value after --method" << endl;
                 ippl::Comm->abort();
+            } else if (option == "--integrator") {
+                msg << "Missing value after --integrator" << endl;
+                ippl::Comm->abort();
             }
+        }
+
+        if (time_integrator != "leapfrog" && time_integrator != "rk4") {
+            msg << "Invalid --integrator value " << time_integrator
+                << ". Use leapfrog or rk4." << endl;
+            ippl::Comm->abort();
         }
 
         msg << " Grid size: " << nr
             << " No. of virtual particles per step: " << nr[0] * nr[1]
             << " No. of time steps: " << nt << " dt: " << dt
-            << " Method: " << method << endl;
+            << " Method: " << method
+            << " Time integrator: " << time_integrator << endl;
 
         ippl::NDIndex<Dim> domain;
         for (unsigned i = 0; i < Dim; i++) {
@@ -97,6 +115,7 @@ int main(int argc, char* argv[]) {
             dump_freq,
             dt,
             method,
+            time_integrator,
             rmin,
             rmax,
             origin,

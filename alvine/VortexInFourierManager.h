@@ -42,13 +42,14 @@ public:
                         std::string method_ = "vif",
                         int spectral_filter_ = 0,
                         double viscosity_ = 0.0,
+                        std::string time_integrator_ = "leapfrog",
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
                         Vector_t<double, Dim> origin_ = 0.0,
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
         : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
-                                spectral_filter_, viscosity_) {
+                                spectral_filter_, viscosity_, time_integrator_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -495,7 +496,134 @@ public:
         }
     }
     void advance() override {
-        LeapFrogStep();
+        if (this->useRK4()) {
+            RK4Step();
+        } else {
+            LeapFrogStep();
+        }
+    }
+
+    void computeSpectralParticleVelocity(bool diagnostics) {
+        static IpplTimings::TimerRef PTimer      = IpplTimings::getTimer("pushVelocity");
+        static IpplTimings::TimerRef SolveTimer  = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
+        static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
+
+        IpplTimings::startTimer(par2gridTimer);
+        this->spectralScatter();
+        IpplTimings::stopTimer(par2gridTimer);
+
+        IpplTimings::startTimer(SolveTimer);
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_hat_m);
+        }
+        this->computeSpectralVelocityModes();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+        }
+        IpplTimings::stopTimer(SolveTimer);
+
+        IpplTimings::startTimer(PTimer);
+        if (diagnostics) {
+            logEnergyDiagnostics();
+            logEnstrophyDiagnostics();
+            this->logCirculationDiagnostics(this->computeParticleCirculation());
+            logVorticitySpectrum();
+            logDivergenceDiagnostics();
+        }
+        IpplTimings::stopTimer(PTimer);
+
+        IpplTimings::startTimer(grid2parTimer);
+        this->spectralGather();
+        IpplTimings::stopTimer(grid2parTimer);
+    }
+
+    void RK4Step() {
+        static IpplTimings::TimerRef RTimer      = IpplTimings::getTimer("rk4PushPosition");
+        static IpplTimings::TimerRef updateTimer = IpplTimings::getTimer("update");
+        static IpplTimings::TimerRef SolveTimer  = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
+
+        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
+        const T dt = this->dt_m;
+
+        pc->rk4_R0 = pc->R;
+
+        computeSpectralParticleVelocity(true);
+        pc->rk4_k1 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k1;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeSpectralParticleVelocity(false);
+        pc->rk4_k2 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k2;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeSpectralParticleVelocity(false);
+        pc->rk4_k3 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeSpectralParticleVelocity(false);
+        pc->rk4_k4 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R_old = pc->rk4_R0;
+        pc->R = pc->rk4_R0 + (dt / 6.0) *
+                              (pc->rk4_k1 + 2.0 * pc->rk4_k2 + 2.0 * pc->rk4_k3 + pc->rk4_k4);
+        bootstrap_next_push_m = true;
+        IpplTimings::stopTimer(RTimer);
+
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        if (this->viscosity_m > 0.0) {
+            this->spectralScatter();
+            this->viscosity_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->computeSpectralViscosity(this->viscosity_hat_m);
+            this->spectralGatherViscosity(this->viscosity_hat_m);
+            this->updateParticleVorticityViscosity();
+        }
+
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            IpplTimings::startTimer(par2gridTimer);
+            this->spectralScatter();
+            IpplTimings::stopTimer(par2gridTimer);
+
+            IpplTimings::startTimer(SolveTimer);
+            if (this->useHouLiFilter()) {
+                this->Hou_Li_filter(this->omega_hat_m);
+            }
+            this->computeSpectralVelocityModes();
+            if (this->useHouLiFilter()) {
+                this->Hou_Li_filter(this->ux_hat_m);
+                this->Hou_Li_filter(this->uy_hat_m);
+            }
+            this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+            this->logTgvVelocityDiagnostics("vif_tgv_velocity_error.csv");
+            IpplTimings::stopTimer(SolveTimer);
+
+            remeshParticlesFromGrid();
+            bootstrap_next_push_m = true;
+        }
     }
 
     
