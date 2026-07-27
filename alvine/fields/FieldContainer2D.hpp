@@ -65,7 +65,7 @@ public:
     void setMesh(Mesh_t<Dim>& mesh) { mesh_m = mesh; }
 
     FieldLayout_t<Dim>& getFL() { return fl_m; }
-    void setFL(std::shared_ptr<FieldLayout_t<Dim>>& fl) { fl_m = fl; }
+    void setFL(FieldLayout_t<Dim>& fl) { fl_m = fl; }
 
     void initializeFields() {
         A_field_m.initialize(mesh_m, fl_m);
