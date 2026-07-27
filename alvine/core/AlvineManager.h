@@ -24,6 +24,8 @@
 #include "Random/NormalDistribution.h"
 #include "Random/Randn.h"
 #include "FFT/Transform/Transform.h"
+#include "../test_cases/TaylorGreen2D.hpp"
+#include "../test_cases/TestCaseSelection.hpp"
 
 template <typename T, unsigned Dim>
 class AlvineManager

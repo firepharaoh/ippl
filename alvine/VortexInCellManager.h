@@ -214,7 +214,7 @@ public:
                 double y = ymin_global + (iy_global + 0.5) * dyp;
 
                 omega_view(i) =
-                    omega0 * 2.0 * cos(x) * cos(y) * Ap; // Taylor-Green circulation.
+                    omega0 * TaylorGreen2D<T>::vorticity(x, y, T(0.0), T(0.0)) * Ap;
             });
 
         Kokkos::fence();

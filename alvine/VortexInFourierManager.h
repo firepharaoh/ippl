@@ -210,6 +210,7 @@ public:
         auto omega_view = pc->omega.getView();
         double omega0   = 1.0;       // physical vorticity amplitude
         double Ap       = dxp * dyp; // particle area
+        const T viscosity = this->viscosity_m;
 
         Kokkos::parallel_for(
             "init_particle_vorticity", nlocal,
@@ -223,7 +224,7 @@ public:
                 double y = ymin_global + (iy_global + 0.5) * dyp;
 
                 omega_view(i) =
-                    omega0 * 2.0 * cos(x) * cos(y) * Ap; // Taylor-Green circulation.
+                    omega0 * TaylorGreen2D<T>::vorticity(x, y, T(0.0), viscosity) * Ap;
             });
 
         Kokkos::fence();

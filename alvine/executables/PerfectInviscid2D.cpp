@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
 
         if (argc < 7) {
             msg << "Usage: PerfectInviscid2D <nx> <ny> <Np> <Nt> <stype> <dump_freq> "
-                   "[--dt value] [--method label]"
+                   "[--dt value] [--method label] [--test-case taylor_green_2d]"
                 << endl;
             ippl::Comm->abort();
         }
@@ -48,6 +48,7 @@ int main(int argc, char* argv[]) {
 
         double dt          = 0.05;
         std::string method = "perfect_2d_inviscid";
+        std::string test_case = "taylor_green_2d";
 
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -55,6 +56,11 @@ int main(int argc, char* argv[]) {
                 dt = std::atof(argv[arg++]);
             } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
                 method = argv[arg++];
+            } else if (option == "--test-case" && arg < static_cast<unsigned>(argc)) {
+                test_case = alvine::normalizeTestCaseName(argv[arg++]);
+            } else if (option == "--test-case") {
+                msg << "Missing value after --test-case" << endl;
+                ippl::Comm->abort();
             } else if ((option == "--overallocate" || option == "-b" || option == "--info"
                         || option == "-i" || option == "--timer-fences")
                        && arg < static_cast<unsigned>(argc)) {
@@ -67,6 +73,12 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        if (!alvine::isSupportedTestCase(test_case)) {
+            msg << "Invalid --test-case value " << test_case
+                << ". Currently supported: taylor_green_2d." << endl;
+            ippl::Comm->abort();
+        }
+
         msg << " Grid size: " << nr
             << " No. of particles: " << np
             << " No. of time steps: " << nt
@@ -74,10 +86,11 @@ int main(int argc, char* argv[]) {
             << " Solver type: " << stype
             << " Dump frequency: " << dump_freq
             << " Method: " << method
+            << " Test case: " << test_case
             << endl;
 
-        Vector_t<double, Dim> rmin(0.0);
-        Vector_t<double, Dim> rmax(2.0 * std::acos(-1.0));
+        Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
+        Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
 
         PerfectInviscid2DManager<T, Dim> manager(

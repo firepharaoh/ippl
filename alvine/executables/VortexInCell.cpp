@@ -12,6 +12,7 @@
 //     remesh_freq= Remeshing frequency. Default 1 remeshes every step; 0 disables remeshing.
 //     --dt     = Optional timestep. Default 0.05.
 //     --method = Optional method label used in diagnostic CSV filenames. Default vic.
+//     --test-case = Optional test case: taylor_green_2d. Default taylor_green_2d.
 //     --integrator = Optional time integrator: leapfrog or rk4. Default leapfrog.
 //     ovfactor = Over-allocation factor for the buffers used in the communication. Typical
 //                values are 1.0, 2.0. Value 1.0 means no over-allocation.
@@ -74,6 +75,7 @@ int main(int argc, char* argv[]) {
         }
         double dt = 0.05;
         std::string method = "vic";
+        std::string test_case = "taylor_green_2d";
         std::string time_integrator = "leapfrog";
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -81,6 +83,8 @@ int main(int argc, char* argv[]) {
                 dt = std::atof(argv[arg++]);
             } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
                 method = argv[arg++];
+            } else if (option == "--test-case" && arg < static_cast<unsigned>(argc)) {
+                test_case = alvine::normalizeTestCaseName(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
                 time_integrator = argv[arg++];
                 std::transform(time_integrator.begin(), time_integrator.end(),
@@ -92,10 +96,19 @@ int main(int argc, char* argv[]) {
             } else if (option == "--method") {
                 msg << "Missing value after --method" << endl;
                 ippl::Comm->abort();
+            } else if (option == "--test-case") {
+                msg << "Missing value after --test-case" << endl;
+                ippl::Comm->abort();
             } else if (option == "--integrator") {
                 msg << "Missing value after --integrator" << endl;
                 ippl::Comm->abort();
             }
+        }
+
+        if (!alvine::isSupportedTestCase(test_case)) {
+            msg << "Invalid --test-case value " << test_case
+                << ". Currently supported: taylor_green_2d." << endl;
+            ippl::Comm->abort();
         }
 
         if (time_integrator != "leapfrog" && time_integrator != "rk4") {
@@ -107,6 +120,7 @@ int main(int argc, char* argv[]) {
         msg << " Grid size: " << nr << " No. of particles: " << np
             << " No. of time steps: " << nt << " dt: " << dt
             << " Method: " << method << " Remesh frequency: " << remesh_freq
+            << " Test case: " << test_case
             << " Time integrator: " << time_integrator << endl;
         
         // ===== CRITICAL: Create mesh and layout with proper MPI decomposition =====
@@ -115,11 +129,8 @@ int main(int argc, char* argv[]) {
             domain[i] = ippl::Index(nr[i]);
         }
 
-        // Domain bounds (adjust as needed for your vortex problem)
-        Vector_t<double, Dim> rmin(0.0);
-        // Vector_t<double, Dim> rmax(10.0);
-        // Taylor-Green vortex is typically defined on a 2pi x 2pi domain.
-        Vector_t<double, Dim> rmax(2.0 * std::acos(-1.0));
+        Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
+        Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
         Vector_t<double, Dim> hr = (rmax - rmin) / nr;
 

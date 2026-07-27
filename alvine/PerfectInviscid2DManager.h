@@ -88,7 +88,7 @@ public:
                 const double x = rmin[0] + (i + 0.5) * hr[0];
                 const double y = rmin[1] + (j + 0.5) * hr[1];
 
-                omega_view(li, lj) = 2.0 * cos(x) * cos(y);
+                omega_view(li, lj) = TaylorGreen2D<T>::vorticity(x, y, T(0.0), T(0.0));
             });
 
         Kokkos::fence();
@@ -122,7 +122,8 @@ public:
                     const double x = rmin[0] + (i + 0.5) * hr[0];
                     const double y = rmin[1] + (j + 0.5) * hr[1];
 
-                    u_view(li, lj) = {-cos(x) * sin(y), sin(x) * cos(y)};
+                    u_view(li, lj) = {TaylorGreen2D<T>::velocityX(x, y, T(0.0), T(0.0)),
+                                      TaylorGreen2D<T>::velocityY(x, y, T(0.0), T(0.0))};
                 });
 
             Kokkos::fence();

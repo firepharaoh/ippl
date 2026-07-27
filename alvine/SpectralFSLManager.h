@@ -316,6 +316,7 @@ void initializeGridVorticity() {
     Vector_t<double, Dim> rmin = this->rmin_m;
     Vector_t<double, Dim> rmax = this->rmax_m;
     Vector_t<double, Dim> hr   = this->hr_m;
+    const T viscosity = this->viscosity_m;
 
     double y_mid = 0.5 * (rmin[1] + rmax[1]);
     double y_low = y_mid - 1.0;
@@ -330,11 +331,12 @@ void initializeGridVorticity() {
             int i = i0 + li - nghost;
             int j = j0 + lj - nghost;
 
-            double y = rmin[1] + (j + 0.5) * hr[1];
             //double perturb = alvine::sinusoidalVorticityPerturbation(i, j);
 
             //omega_view(li, lj) = (y >= y_low && y <= y_high) ? 1.0 + perturb : 0.0;
-            omega_view(li, lj) = 2.0 * cos(rmin[0] + (i + 0.5) * hr[0]) * cos(rmin[1] + (j + 0.5) * hr[1]) ; //Taylor-Green vortex initial condition.
+            const T x = rmin[0] + (i + T(0.5)) * hr[0];
+            const T y = rmin[1] + (j + T(0.5)) * hr[1];
+            omega_view(li, lj) = TaylorGreen2D<T>::vorticity(x, y, T(0.0), viscosity);
         }
     );
 

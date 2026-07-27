@@ -131,6 +131,8 @@
 
             Vector_t<double, Dim> rmin = rmin_m;
             Vector_t<double, Dim> hr   = hr_m;
+            const T time = time_m;
+            const T viscosity = viscosity_m;
 
             double localErr2        = 0.0;
             double localOppositeErr2 = 0.0;
@@ -149,8 +151,10 @@
                     const double x = rmin[0] + (gx + 0.5) * hr[0];
                     const double y = rmin[1] + (gy + 0.5) * hr[1];
 
-                    const double uxExact = -Kokkos::cos(x) * Kokkos::sin(y);
-                    const double uyExact = Kokkos::sin(x) * Kokkos::cos(y);
+                    const double uxExact =
+                        TaylorGreen2D<T>::velocityX(x, y, time, viscosity);
+                    const double uyExact =
+                        TaylorGreen2D<T>::velocityY(x, y, time, viscosity);
 
                     const double dux = u_view(i, j)[0] - uxExact;
                     const double duy = u_view(i, j)[1] - uyExact;
@@ -182,8 +186,10 @@
                     const double x = rmin[0] + (gx + 0.5) * hr[0];
                     const double y = rmin[1] + (gy + 0.5) * hr[1];
 
-                    const double uxExact = -Kokkos::cos(x) * Kokkos::sin(y);
-                    const double uyExact = Kokkos::sin(x) * Kokkos::cos(y);
+                    const double uxExact =
+                        TaylorGreen2D<T>::velocityX(x, y, time, viscosity);
+                    const double uyExact =
+                        TaylorGreen2D<T>::velocityY(x, y, time, viscosity);
 
                     const double dux = u_view(i, j)[0] - uxExact;
                     const double duy = u_view(i, j)[1] - uyExact;
@@ -296,7 +302,7 @@
 
         omegaExact = 0.0;
         omegaError = 0.0;
-        this->fillExactTGVVorticity(omegaExact);
+        this->fillExactTGVVorticity(omegaExact, this->time_m);
 
         omegaError = omegaNum - omegaExact;
 

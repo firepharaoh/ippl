@@ -1,7 +1,8 @@
 // Spectral Forward Semi-Lagrangian Test
 // Usage:
 //   srun ./SpectralFSL <nx> <ny> <Np_unused> <Nt> <stype> <dump_freq> [--dt value]
-//        [--method label] [--filter 0|1|2] [--integrator leapfrog|rk4] --overallocate 1.0 --info 5
+//        [--method label] [--test-case taylor_green_2d] [--filter 0|1|2]
+//        [--integrator leapfrog|rk4] --overallocate 1.0 --info 5
 
 constexpr unsigned Dim = 2;
 using T                = double;
@@ -51,6 +52,7 @@ int main(int argc, char* argv[]) {
         int dump_freq = std::atoi(argv[arg++]);
         double dt = 0.05;
         std::string method = "sfsl";
+        std::string test_case = "taylor_green_2d";
         int spectral_filter = 0;
         std::string time_integrator = "leapfrog";
         while (arg < static_cast<unsigned>(argc)) {
@@ -59,6 +61,8 @@ int main(int argc, char* argv[]) {
                 dt = std::atof(argv[arg++]);
             } else if (option == "--method" && arg < static_cast<unsigned>(argc)) {
                 method = argv[arg++];
+            } else if (option == "--test-case" && arg < static_cast<unsigned>(argc)) {
+                test_case = alvine::normalizeTestCaseName(argv[arg++]);
             } else if (option == "--filter" && arg < static_cast<unsigned>(argc)) {
                 spectral_filter = std::atoi(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
@@ -71,6 +75,9 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--method") {
                 msg << "Missing value after --method" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--test-case") {
+                msg << "Missing value after --test-case" << endl;
                 ippl::Comm->abort();
             } else if (option == "--filter") {
                 msg << "Missing value after --filter" << endl;
@@ -87,6 +94,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (!alvine::isSupportedTestCase(test_case)) {
+            msg << "Invalid --test-case value " << test_case
+                << ". Currently supported: taylor_green_2d." << endl;
+            ippl::Comm->abort();
+        }
+
         if (time_integrator != "leapfrog" && time_integrator != "rk4") {
             msg << "Invalid --integrator value " << time_integrator
                 << ". Use leapfrog or rk4." << endl;
@@ -97,6 +110,7 @@ int main(int argc, char* argv[]) {
             << " No. of virtual particles per step: " << nr[0] * nr[1]
             << " No. of time steps: " << nt << " dt: " << dt
             << " Method: " << method
+            << " Test case: " << test_case
             << " Spectral filter: " << spectral_filter
             << " Time integrator: " << time_integrator << endl;
 
@@ -105,9 +119,8 @@ int main(int argc, char* argv[]) {
             domain[i] = ippl::Index(nr[i]);
         }
 
-        Vector_t<double, Dim> rmin(0.0);
-        // Taylor-Green vortex is typically defined on a 2pi x 2pi domain.
-        Vector_t<double, Dim> rmax(2.0 * std::acos(-1.0));
+        Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
+        Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
         Vector_t<double, Dim> hr = (rmax - rmin) / nr;
 
