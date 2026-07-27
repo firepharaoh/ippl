@@ -4,7 +4,7 @@
 #include <fstream>
 #include <memory>
 
-#include "AlvineManager.h"
+#include "core/AlvineManager.h"
 #include "fields/FieldContainer.hpp"
 #include "FieldSolver.hpp"
 #include "LoadBalancer.hpp"

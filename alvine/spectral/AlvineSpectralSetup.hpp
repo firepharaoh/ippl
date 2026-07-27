@@ -2,6 +2,10 @@
 #define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALSETUP_HPP
 
     void initNUFFT(double tol = 1e-10) {
+        initNUFFT2D(tol);
+    }
+
+    void initNUFFT2D(double tol = 1e-10) {
         ippl::ParameterList p1, p2;
 
         p1.add("tolerance", tol);
