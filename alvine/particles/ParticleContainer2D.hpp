@@ -1,42 +1,44 @@
-#ifndef IPPL_PARTICLE_CONTAINER_H
-#define IPPL_PARTICLE_CONTAINER_H
+#ifndef IPPL_ALVINE_PARTICLE_CONTAINER2D_H
+#define IPPL_ALVINE_PARTICLE_CONTAINER2D_H
 
 #include <memory>
 #include "Manager/BaseManager.h"
 
 // Define the ParticlesContainer class
-template <typename T, unsigned Dim = 3>
-class ParticleContainer : public ippl::ParticleBase<ippl::ParticleSpatialLayout<T, Dim>>{
+template <typename T>
+class ParticleContainer2D : public ippl::ParticleBase<ippl::ParticleSpatialLayout<T, 2>>{
+public:
+    static constexpr unsigned Dim = 2;
     using Base = ippl::ParticleBase<ippl::ParticleSpatialLayout<T, Dim>>;
-    using vorticity_type = std::conditional<Dim == 2, ippl::ParticleAttrib<T>, typename Base::particle_position_type >::type;
+    using particle_position_type = typename Base::particle_position_type;
 
     public:
-        typename Base::particle_position_type P;  
-        vorticity_type omega;
+        particle_position_type P;  
+        ippl::ParticleAttrib<T> omega;
         ippl::ParticleAttrib<T> ux;
         ippl::ParticleAttrib<T> uy;
-        typename Base::particle_position_type R_old;
-        typename Base::particle_position_type rk4_R0;
-        typename Base::particle_position_type rk4_k1;
-        typename Base::particle_position_type rk4_k2;
-        typename Base::particle_position_type rk4_k3;
-        typename Base::particle_position_type rk4_k4;
+        particle_position_type R_old;
+        particle_position_type rk4_R0;
+        particle_position_type rk4_k1;
+        particle_position_type rk4_k2;
+        particle_position_type rk4_k3;
+        particle_position_type rk4_k4;
         ippl::ParticleAttrib<T> viscosity;//Viscosity attribute for particles  
 
     private:
         PLayout_t<T, Dim> pl_m;
     public:
-        ParticleContainer(Mesh_t<Dim>& mesh, FieldLayout_t<Dim>& FL)
+        ParticleContainer2D(Mesh_t<Dim>& mesh, FieldLayout_t<Dim>& FL)
         : pl_m(FL, mesh) {
         this->initialize(pl_m);
         registerAttributes();
         setupBCs();
         }
 
-        ~ParticleContainer(){}
+        ~ParticleContainer2D(){}
 
-        std::shared_ptr<PLayout_t<T, Dim>> getPL() { return pl_m; }
-        void setPL(std::shared_ptr<PLayout_t<T, Dim>>& pl) { pl_m = pl; }
+        PLayout_t<T, Dim>& getPL() { return pl_m; }
+        void setPL(PLayout_t<T, Dim>& pl) { pl_m = pl; }
 
 	void registerAttributes() {
 		// register the particle attributes

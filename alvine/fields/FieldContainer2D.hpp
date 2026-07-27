@@ -1,21 +1,22 @@
-#ifndef IPPL_FIELD_CONTAINER_H
-#define IPPL_FIELD_CONTAINER_H
+#ifndef IPPL_ALVINE_FIELDS_FIELDCONTAINER2D_HPP
+#define IPPL_ALVINE_FIELDS_FIELDCONTAINER2D_HPP
 
+#include <array>
 #include <memory>
 
 #include "Manager/BaseManager.h"
 
-// Define the FieldsContainer class
-template <typename T, unsigned Dim = 3>
-class FieldContainer{
-  using vorticity_field_type = std::conditional<Dim == 2, Field<T, Dim>, VField_t<T, Dim>>::type;
-
-
+template <typename T>
+class FieldContainer2D {
 public:
-    FieldContainer(Vector_t<T, Dim>& hr, Vector_t<T, Dim>& rmin,
-                   Vector_t<T, Dim>& rmax, std::array<bool, Dim> decomp,
-                   ippl::NDIndex<Dim> domain, Vector_t<T, Dim> origin,
-                   bool isAllPeriodic)
+    static constexpr unsigned Dim = 2;
+
+    using vorticity_field_type = Field<T, Dim>;
+
+    FieldContainer2D(Vector_t<T, Dim>& hr, Vector_t<T, Dim>& rmin,
+                     Vector_t<T, Dim>& rmax, std::array<bool, Dim> decomp,
+                     ippl::NDIndex<Dim> domain, Vector_t<T, Dim> origin,
+                     bool isAllPeriodic)
         : hr_m(hr)
         , rmin_m(rmin)
         , rmax_m(rmax)
@@ -23,7 +24,7 @@ public:
         , mesh_m(domain, hr, origin)
         , fl_m(MPI_COMM_WORLD, domain, decomp, isAllPeriodic) {}
 
-    ~FieldContainer(){}
+    ~FieldContainer2D() {}
 
 private:
     Vector_t<double, Dim> hr_m;
@@ -39,7 +40,6 @@ private:
     FieldLayout_t<Dim> fl_m;
 
 public:
-
     vorticity_field_type& getA_field() { return A_field_m; }
     void setA_field(vorticity_field_type& A_field) { A_field_m = A_field; }
 
@@ -62,7 +62,7 @@ public:
     void setDecomp(std::array<bool, Dim> decomp) { decomp_m = decomp; }
 
     Mesh_t<Dim>& getMesh() { return mesh_m; }
-    void setMesh(Mesh_t<Dim> & mesh) { mesh_m = mesh; }
+    void setMesh(Mesh_t<Dim>& mesh) { mesh_m = mesh; }
 
     FieldLayout_t<Dim>& getFL() { return fl_m; }
     void setFL(std::shared_ptr<FieldLayout_t<Dim>>& fl) { fl_m = fl; }

@@ -4,11 +4,11 @@
 #include <memory>
 
 #include "AlvineManager.h"
-#include "FieldContainer.hpp"
+#include "fields/FieldContainer.hpp"
 #include "FieldSolver.hpp"
 #include "LoadBalancer.hpp"
 #include "Manager/BaseManager.h"
-#include "ParticleContainer.hpp"
+#include "particles/ParticleContainer.hpp"
 #include "Random/Distribution.h"
 #include "Random/InverseTransformSampling.h"
 #include "Random/NormalDistribution.h"

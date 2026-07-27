@@ -4,7 +4,7 @@
 #include <memory>
 
 #include "Manager/BaseManager.h"
-#include "ParticleContainer.hpp"
+#include "particles/ParticleContainer.hpp"
 
 using view_type   = typename ippl::detail::ViewType<ippl::Vector<double, Dim>, 1>::view_type;
 using host_type   = typename ippl::ParticleAttrib<T>::host_mirror_type;;/*typename ippl::ParticleAttrib<T>::HostMirror;*/

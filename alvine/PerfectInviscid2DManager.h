@@ -5,10 +5,10 @@
 #include <string>
 
 #include "AlvineManager.h"
-#include "FieldContainer.hpp"
+#include "fields/FieldContainer.hpp"
 #include "FieldSolver.hpp"
 #include "LoadBalancer.hpp"
-#include "ParticleContainer.hpp"
+#include "particles/ParticleContainer.hpp"
 #include "VtkDump.hpp"
 
 template <typename T, unsigned Dim>
