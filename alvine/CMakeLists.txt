@@ -16,6 +16,7 @@ set (COMPILE_FLAGS ${OPAL_CXX_FLAGS})
 
 add_executable (VortexInCell executables/VortexInCell.cpp)
 add_executable (VortexInFourier executables/VortexInFourier.cpp)
+add_executable (VortexInFourier3D executables/VortexInFourier3D.cpp)
 add_executable(Fsl executables/Fsl.cpp)
 add_executable(SpectralFSL executables/SpectralFSL.cpp)
 add_executable(PerfectInviscid2D executables/PerfectInviscid2D.cpp)
@@ -30,6 +31,9 @@ target_link_libraries(SpectralFSL ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 target_include_directories(VortexInFourier PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(VortexInFourier ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
+
+target_include_directories(VortexInFourier3D PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
+target_link_libraries(VortexInFourier3D ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 target_include_directories(PerfectInviscid2D PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine )
 target_link_libraries(PerfectInviscid2D ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
