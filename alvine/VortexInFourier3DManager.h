@@ -69,6 +69,8 @@ public:
         this->spectralSolveParticles();
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        this->logSpectralDiagnostics3D();
+        this->logTaylorGreenDiagnostics3D();
     }
 
     void par2grid() override {}

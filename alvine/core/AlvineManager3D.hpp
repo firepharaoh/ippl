@@ -2,7 +2,14 @@
 #define IPPL_ALVINE_CORE_ALVINE_MANAGER3D_H
 
 #include <array>
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <functional>
+#include <fstream>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <string>
 
 #include "../fields/FieldContainer.hpp"
@@ -11,6 +18,7 @@
 #include "Manager/BaseManager.h"
 #include "Manager/PicManager.h"
 #include "../particles/ParticleContainer.hpp"
+#include "../test_cases/TaylorGreen3D.hpp"
 #include "FFT/Transform/Transform.h"
 
 template <typename T>
@@ -68,6 +76,8 @@ protected:
     ComplexField_t viscosity_y_hat_m;
     ComplexField_t viscosity_z_hat_m;
     RealField_t Sk_m;
+    bool spectral_3d_diagnostics_initialized_m = false;
+    bool tgv_3d_diagnostics_initialized_m = false;
 
 public:
     AlvineManager3D(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
@@ -122,6 +132,9 @@ public:
 
 #include "../spectral/AlvineSpectralSetup3D.hpp"
 #include "../spectral/AlvineSpectralOps3D.hpp"
+#include "../io/AlvineFileNaming.hpp"
+#include "../diagnostics/AlvineSpectralDiagnostics3D.hpp"
+#include "../diagnostics/AlvineTaylorGreenDiagnostics3D.hpp"
 };
 
 #endif
