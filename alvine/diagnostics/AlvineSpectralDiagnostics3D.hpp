@@ -47,14 +47,10 @@
         double globalEnergy = 0.0;
         ippl::Comm->allreduce(localEnergy, globalEnergy, 1, std::plus<double>());
 
-        // The 3D NUFFT type-1 modes represent Fourier integrals because the
-        // particle vorticity stores vorticity times particle volume. The 3D
-        // Biot-Savart step preserves that scaling, so u_hat_raw = volume * u_hat.
-        // Parseval for Fourier-series coefficients is:
-        //   E = 0.5 * volume * sum(|u_hat|^2)
-        // Therefore with raw modes:
-        //   E = 0.5 * sum(|u_hat_raw|^2) / volume.
-        return T(0.5) * globalEnergy / volume;
+        // computeSpectralVelocityModes3D divides the raw type-1 NUFFT vorticity
+        // modes by volume, so ux_hat_m, uy_hat_m, and uz_hat_m are Fourier-series
+        // velocity coefficients. Parseval contributes one factor of volume.
+        return T(0.5) * volume * globalEnergy;
     }
 
     double computeSpectralEnergy() {
@@ -177,9 +173,9 @@
         double globalDiv2 = 0.0;
         ippl::Comm->allreduce(localDiv2, globalDiv2, 1, std::plus<double>());
 
-        // div_hat is built from raw velocity modes, and u_hat_raw = volume * u_hat.
-        // Therefore ||div u||_L2^2 = sum(|div_hat_raw|^2) / volume.
-        return std::sqrt(globalDiv2 / volume);
+        // ux_hat_m, uy_hat_m, and uz_hat_m are Fourier-series coefficients, so
+        // Parseval contributes one factor of volume.
+        return std::sqrt(volume * globalDiv2);
     }
 
     double computeSpectralDivergenceL2() {

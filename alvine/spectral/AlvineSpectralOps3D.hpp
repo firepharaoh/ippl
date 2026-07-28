@@ -82,6 +82,7 @@
         const T Lx = dx[0] * Nx;
         const T Ly = dx[1] * Ny;
         const T Lz = dx[2] * Nz;
+        const T volume = Lx * Ly * Lz;
 
         const T twoPi = T(2.0 * std::acos(-1.0));
         const Kokkos::complex<T> imag(0.0, 1.0);
@@ -120,11 +121,11 @@
                     uy(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
                     uz(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
                 } else {
-                    const auto invK2 = T(1.0) / k2;
+                    const auto invVolumeK2 = T(1.0) / (volume * k2);
 
-                    ux(i, j, k) = imag * (ky * oz(i, j, k) - kz * oy(i, j, k)) * invK2;
-                    uy(i, j, k) = imag * (kz * ox(i, j, k) - kx * oz(i, j, k)) * invK2;
-                    uz(i, j, k) = imag * (kx * oy(i, j, k) - ky * ox(i, j, k)) * invK2;
+                    ux(i, j, k) = imag * (ky * oz(i, j, k) - kz * oy(i, j, k)) * invVolumeK2;
+                    uy(i, j, k) = imag * (kz * ox(i, j, k) - kx * oz(i, j, k)) * invVolumeK2;
+                    uz(i, j, k) = imag * (kx * oy(i, j, k) - ky * ox(i, j, k)) * invVolumeK2;
                 }
 
             }
