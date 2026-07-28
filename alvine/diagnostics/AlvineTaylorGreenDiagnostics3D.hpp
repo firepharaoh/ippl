@@ -52,6 +52,55 @@
         return std::sqrt(globalErr2 / std::max(globalRef2, 1e-30));
     }
 
+    double computeTGVVelocityProjectionScale3D() {
+        auto& uField = this->fcontainer_m->getUField();
+        auto u = uField.getView();
+
+        const auto& localND = uField.getLayout().getLocalNDIndex();
+        const int nghost = uField.getNghost();
+        const T cellVolume = hr_m[0] * hr_m[1] * hr_m[2];
+        const Vector_t<double, Dim> rmin = rmin_m;
+        const Vector_t<double, Dim> hr = hr_m;
+
+        double localDot = 0.0;
+        double localRef2 = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_reduce(
+            "tgv_velocity_projection_scale_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(u.extent(0)) - nghost,
+                         static_cast<int>(u.extent(1)) - nghost,
+                         static_cast<int>(u.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k,
+                          double& dot, double& ref2) {
+                const int gx = i - nghost + localND[0].first();
+                const int gy = j - nghost + localND[1].first();
+                const int gz = k - nghost + localND[2].first();
+
+                const T x = rmin[0] + (gx + T(0.5)) * hr[0];
+                const T y = rmin[1] + (gy + T(0.5)) * hr[1];
+                const T z = rmin[2] + (gz + T(0.5)) * hr[2];
+
+                const auto exact = TaylorGreen3D<T>::velocity(x, y, z);
+                dot += u(i, j, k)[0] * exact[0]
+                     + u(i, j, k)[1] * exact[1]
+                     + u(i, j, k)[2] * exact[2];
+                ref2 += exact[0] * exact[0] + exact[1] * exact[1] + exact[2] * exact[2];
+            },
+            Kokkos::Sum<double>(localDot),
+            Kokkos::Sum<double>(localRef2));
+
+        localDot *= cellVolume;
+        localRef2 *= cellVolume;
+
+        double globalDot = 0.0;
+        double globalRef2 = 0.0;
+        ippl::Comm->allreduce(localDot, globalDot, 1, std::plus<double>());
+        ippl::Comm->allreduce(localRef2, globalRef2, 1, std::plus<double>());
+
+        return globalDot / std::max(globalRef2, 1e-30);
+    }
+
     double computeTGVVorticityError3D() {
         auto& omegaField = this->fcontainer_m->getOmegaField();
         auto omega = omegaField.getView();
@@ -106,6 +155,7 @@
     void logTaylorGreenDiagnostics3D(
         const std::string& filename = "tgv_3d_field_error.csv") {
         const double velocityRelL2 = computeTGVVelocityError3D();
+        const double velocityProjectionScale = computeTGVVelocityProjectionScale3D();
         const double vorticityRelL2 = computeTGVVorticityError3D();
 
         if (ippl::Comm->rank() == 0) {
@@ -116,15 +166,17 @@
             out.setf(std::ios::scientific, std::ios::floatfield);
 
             if (firstWrite) {
-                out << "method,dt,step,time,velocity_rel_l2_error,"
+                out << "method,dt,step,time,velocity_rel_l2_error,velocity_projection_scale,"
                     << "vorticity_rel_l2_error\n";
             }
 
             out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
-                << velocityRelL2 << "," << vorticityRelL2 << "\n";
+                << velocityRelL2 << "," << velocityProjectionScale << ","
+                << vorticityRelL2 << "\n";
 
             Inform m("tgv_3d_field_error ");
             m << "velocityRelL2 = " << velocityRelL2
+              << ", velocityProjectionScale = " << velocityProjectionScale
               << ", vorticityRelL2 = " << vorticityRelL2 << endl;
         }
 
