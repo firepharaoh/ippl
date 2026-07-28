@@ -75,7 +75,6 @@ public:
 
     void grid2par() override {}
 
-private:
     void initializeParticles() {
         auto& FL = this->fcontainer_m->getFL();
         const auto local = FL.getLocalNDIndex();
