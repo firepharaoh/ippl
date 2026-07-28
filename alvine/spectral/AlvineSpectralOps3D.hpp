@@ -68,20 +68,17 @@
         auto uz = uz_hat_m.getView();
 
         auto& layout = omega_x_hat_m.getLayout();
-        auto& mesh   = omega_x_hat_m.get_mesh();
 
         const auto& lDom   = layout.getLocalNDIndex();
-        const auto& domain = layout.getDomain();
-        const auto& dx     = mesh.getMeshSpacing();
         const int nghost   = omega_x_hat_m.getNghost();
 
-        const int Nx = domain[0].length();
-        const int Ny = domain[1].length();
-        const int Nz = domain[2].length();
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
 
-        const T Lx = dx[0] * Nx;
-        const T Ly = dx[1] * Ny;
-        const T Lz = dx[2] * Nz;
+        const T Lx = rmax_m[0] - rmin_m[0];
+        const T Ly = rmax_m[1] - rmin_m[1];
+        const T Lz = rmax_m[2] - rmin_m[2];
         const T volume = Lx * Ly * Lz;
 
         const T twoPi = T(2.0 * std::acos(-1.0));
