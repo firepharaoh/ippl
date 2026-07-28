@@ -95,7 +95,7 @@
       }
     }
 
-    void spectralGather() {
+    void spectralGather2D() {
         if constexpr (Dim == 2) {
             if (!nufftType2_mp) {
                 throw std::runtime_error("spectralGather called before initNUFFT");
@@ -148,6 +148,9 @@
         } else {
             throw std::runtime_error("AlvineManager::spectralGather is implemented for 2D VIC only");
         }
+    }
+    void spectralGather() {
+        spectralGather2D();
     }
     void spectralGatherViscosity2D(ComplexField_t& visc_hat) {
         if constexpr (Dim == 2) {
@@ -303,7 +306,7 @@
 
         const auto& lDom   = layout.getLocalNDIndex();
         const auto& domain = layout.getDomain();
-²        const auto& dx     = mesh.getMeshSpacing();
+        const auto& dx     = mesh.getMeshSpacing();
         const int nghost   = omega_hat_m.getNghost();
 
         const int Nx = domain[0].length();
