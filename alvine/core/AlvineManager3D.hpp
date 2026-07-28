@@ -11,6 +11,7 @@
 #include "Manager/BaseManager.h"
 #include "Manager/PicManager.h"
 #include "../particles/ParticleContainer.hpp"
+#include "FFT/Transform/Transform.h"
 
 template <typename T>
 class AlvineManager3D
@@ -25,6 +26,13 @@ public:
     using LoadBalancer_t      = LoadBalancer<T, Dim>;
     using Base                = ippl::ParticleBase<ippl::ParticleSpatialLayout<T, Dim>>;
     using RealField_t         = Field<T, Dim>;
+    using Nufft_t             = ippl::FFT<ippl::NUFFTransform, RealField_t>;
+    using ComplexField_t      = typename Nufft_t::ComplexField;
+    using SpectralFft_t       = ippl::FFT<ippl::CCTransform, ComplexField_t>;
+
+    std::shared_ptr<Nufft_t> nufftType1_mp;
+    std::shared_ptr<Nufft_t> nufftType2_mp;
+    std::shared_ptr<SpectralFft_t> spectralFft_mp;
 
 protected:
     unsigned nt_m;
@@ -48,6 +56,18 @@ protected:
     Vector_t<double, Dim> rmax_m;
     Vector_t<double, Dim> origin_m;
     Vector_t<double, Dim> hr_m;
+    ComplexField_t omega_x_hat_m;
+    ComplexField_t omega_y_hat_m;
+    ComplexField_t omega_z_hat_m;
+
+    ComplexField_t ux_hat_m;
+    ComplexField_t uy_hat_m;
+    ComplexField_t uz_hat_m;
+
+    ComplexField_t viscosity_x_hat_m;
+    ComplexField_t viscosity_y_hat_m;
+    ComplexField_t viscosity_z_hat_m;
+    RealField_t Sk_m;
 
 public:
     AlvineManager3D(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
@@ -99,6 +119,9 @@ public:
         }
         m << this->it_m << " Done" << endl;
     }
+
+#include "../spectral/AlvineSpectralSetup3D.hpp"
+#include "../spectral/AlvineSpectralOps3D.hpp"
 };
 
 #endif

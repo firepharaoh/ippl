@@ -1,8 +1,8 @@
-#ifndef IPPL_ALVINE_SPECTRAL_ALVINESPECTRALOPS_HPP
-#define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALOPS_HPP
+#ifndef IPPL_ALVINE_SPECTRAL_ALVINESPECTRALOPS2D_HPP
+#define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALOPS2D_HPP
 
     // SPECTRAL IMPLEMENTATION
-    void spectralScatter() {
+    void spectralScatter2D() {
       if constexpr (Dim == 2) {
         if (!nufftType1_mp) {
           throw std::runtime_error("AlvineManager::spectralScatter called before initNUFFT");
@@ -34,7 +34,7 @@
       }
     }
 
-    void computeSpectralVelocityModes() {
+    void computeSpectralVelocityModes2D() {
       if constexpr (Dim == 2) {
         auto omega = omega_hat_m.getView();
         auto ux    = ux_hat_m.getView();
@@ -149,7 +149,7 @@
             throw std::runtime_error("AlvineManager::spectralGather is implemented for 2D VIC only");
         }
     }
-    void spectralGatherViscosity(ComplexField_t& visc_hat) {
+    void spectralGatherViscosity2D(ComplexField_t& visc_hat) {
         if constexpr (Dim == 2) {
             if(!nufftType2_mp){
                 throw std::runtime_error("spectralGatherViscosity called before initNUFFT");
@@ -163,9 +163,9 @@
         }
     }
     void spectralSolveParticles() {
-      spectralScatter();
-      computeSpectralVelocityModes();
-      spectralGather();
+      spectralScatter2D();
+      computeSpectralVelocityModes2D();
+      spectralGather2D();
     }
 
     void applyCellCenteredIfftPhase(ComplexField_t& modes) {
@@ -303,7 +303,7 @@
 
         const auto& lDom   = layout.getLocalNDIndex();
         const auto& domain = layout.getDomain();
-        const auto& dx     = mesh.getMeshSpacing();
+²        const auto& dx     = mesh.getMeshSpacing();
         const int nghost   = omega_hat_m.getNghost();
 
         const int Nx = domain[0].length();

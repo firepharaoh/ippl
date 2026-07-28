@@ -1,5 +1,5 @@
-#ifndef IPPL_ALVINE_SPECTRAL_ALVINESPECTRALSETUP_HPP
-#define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALSETUP_HPP
+#ifndef IPPL_ALVINE_SPECTRAL_ALVINESPECTRALSETUP2D_HPP
+#define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALSETUP2D_HPP
 
     void initNUFFT(double tol = 1e-10) {
         initNUFFT2D(tol);
@@ -11,7 +11,6 @@
         p1.add("tolerance", tol);
         p2.add("tolerance", tol);
 
-        // 2D currently uses native NUFFT path. FINUFFT path is 3D-only here.
         p1.add("use_finufft", false);
         p2.add("use_finufft", false);
         p1.add("use_upsampled_inputs", false);

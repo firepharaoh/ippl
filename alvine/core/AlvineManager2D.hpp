@@ -145,13 +145,13 @@ public:
     }
 
 #include "../io/AlvineFileNaming.hpp"
-#include "../spectral/AlvineSpectralSetup.hpp"
+#include "../spectral/AlvineSpectralSetup2D.hpp"
 #include "../particles/AlvineParticleGridTransfer.hpp"
 #include "../spectral/AlvineGridVelocity.hpp"
 #include "../test_cases/AlvineTaylorGreen2D.hpp"
 #include "../diagnostics/AlvineDiagnostics.hpp"
 #include "../particles/AlvineScatterCIC.hpp"
-#include "../spectral/AlvineSpectralOps.hpp"
+#include "../spectral/AlvineSpectralOps2D.hpp"
 #include "../diagnostics/AlvineSpectralDiagnostics.hpp"
 };
 

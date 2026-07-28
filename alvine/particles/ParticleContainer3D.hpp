@@ -15,6 +15,9 @@ public:
     public:
         particle_position_type P;  
         particle_position_type omega;
+        ippl::ParticleAttrib<T> omega_x;
+        ippl::ParticleAttrib<T> omega_y;
+        ippl::ParticleAttrib<T> omega_z;
         ippl::ParticleAttrib<T> ux;
         ippl::ParticleAttrib<T> uy;
         ippl::ParticleAttrib<T> uz;
@@ -25,7 +28,12 @@ public:
         particle_position_type rk4_k2;
         particle_position_type rk4_k3;
         particle_position_type rk4_k4;
+
         particle_position_type viscosity;//Viscosity attribute for particles  
+        ippl::ParticleAttrib<T> viscosity_x;
+        ippl::ParticleAttrib<T> viscosity_y;
+        ippl::ParticleAttrib<T> viscosity_z;
+
         particle_position_type stretching_term; // Stretching term attribute for particles (Still not implemented )
     private:
         PLayout_t<T, Dim> pl_m;
@@ -45,8 +53,14 @@ public:
 	void registerAttributes() {
 		// register the particle attributes
 
-		this->addAttribute(P);
+        this->addAttribute(P);
         this->addAttribute(omega);
+        this->addAttribute(omega_x);
+        this->addAttribute(omega_y);
+        this->addAttribute(omega_z);
+        this->addAttribute(viscosity_x);
+        this->addAttribute(viscosity_y);
+        this->addAttribute(viscosity_z);
         this->addAttribute(ux);
         this->addAttribute(uy);
         this->addAttribute(uz);
@@ -59,7 +73,8 @@ public:
         this->addAttribute(rk4_k4);
         this->addAttribute(viscosity); // Register the viscosity attribute
         this->addAttribute(stretching_term);
-	}
+
+    }
 	void setupBCs() { setBCAllPeriodic(); }
 
     private:
