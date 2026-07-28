@@ -1,6 +1,3 @@
-#ifndef IPPL_ALVINE_IO_ALVINEFILENAMING_HPP
-#define IPPL_ALVINE_IO_ALVINEFILENAMING_HPP
-
     std::string sanitizeFileToken(std::string token) const {
         for (char& c : token) {
             if (!std::isalnum(static_cast<unsigned char>(c))) {
@@ -30,5 +27,3 @@
     std::string diagnosticFileName(const std::string& baseName) const {
         return sanitizeFileToken(method_m) + "_dt_" + dtFileToken() + "_" + baseName;
     }
-
-#endif
