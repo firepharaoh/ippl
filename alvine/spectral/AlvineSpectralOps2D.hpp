@@ -34,6 +34,10 @@
       }
     }
 
+    void spectralScatter() {
+      spectralScatter2D();
+    }
+
     void computeSpectralVelocityModes2D() {
       if constexpr (Dim == 2) {
         auto omega = omega_hat_m.getView();
@@ -93,6 +97,10 @@
         throw std::runtime_error(
             "AlvineManager::computeSpectralVelocityModes is implemented for 2D VIC only");
       }
+    }
+
+    void computeSpectralVelocityModes() {
+      computeSpectralVelocityModes2D();
     }
 
     void spectralGather2D() {
@@ -164,6 +172,9 @@
         } else {
             throw std::runtime_error("AlvineManager::spectralGatherViscosity is implemented for 2D VIC only");
         }
+    }
+    void spectralGatherViscosity(ComplexField_t& visc_hat) {
+        spectralGatherViscosity2D(visc_hat);
     }
     void spectralSolveParticles() {
       spectralScatter2D();
