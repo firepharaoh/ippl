@@ -346,10 +346,11 @@
         pc.uy = 0.0;
         pc.uz = 0.0;
 
+        auto uxModes = ux_hat_m.deepCopy();
+        auto uyModes = uy_hat_m.deepCopy();
+        auto uzModes = uz_hat_m.deepCopy();
+
         if (useShapeFunctionFilter()) {
-            auto uxModes = ux_hat_m.deepCopy();
-            auto uyModes = uy_hat_m.deepCopy();
-            auto uzModes = uz_hat_m.deepCopy();
             auto uxModeView = uxModes.getView();
             auto uyModeView = uyModes.getView();
             auto uzModeView = uzModes.getView();
@@ -370,14 +371,11 @@
                 });
             Kokkos::fence();
 
-            nufftType2_mp->transform(pc.R, pc.ux, uxModes);
-            nufftType2_mp->transform(pc.R, pc.uy, uyModes);
-            nufftType2_mp->transform(pc.R, pc.uz, uzModes);
-        } else {
-            nufftType2_mp->transform(pc.R, pc.ux, ux_hat_m);
-            nufftType2_mp->transform(pc.R, pc.uy, uy_hat_m);
-            nufftType2_mp->transform(pc.R, pc.uz, uz_hat_m);
         }
+
+        nufftType2_mp->transform(pc.R, pc.ux, uxModes);
+        nufftType2_mp->transform(pc.R, pc.uy, uyModes);
+        nufftType2_mp->transform(pc.R, pc.uz, uzModes);
 
         auto P = pc.P.getView();
         auto u = pc.u.getView();
