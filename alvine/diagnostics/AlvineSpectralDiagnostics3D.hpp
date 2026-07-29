@@ -284,12 +284,12 @@
                     const T sz = mz > 0 ? T(1.0) : T(-1.0);
 
                     // Current TaylorGreen3D convention:
-                    // omega_x = -cos(x)sin(y)sin(z)
-                    // omega_y = -sin(x)cos(y)sin(z)
-                    // omega_z =  2sin(x)sin(y)cos(z)
-                    const Kokkos::complex<T> oxExact(T(0.0), sx * sy * sz / T(8.0));
-                    const Kokkos::complex<T> oyExact(T(0.0), sx * sy * sz / T(8.0));
-                    const Kokkos::complex<T> ozExact(T(0.0), -sx * sy * sz / T(4.0));
+                    // omega_x = -cos(x)sin(y)sin(z) gives omega_x_hat = sy*sz/8
+                    // omega_y = -sin(x)cos(y)sin(z) gives omega_y_hat = sx*sz/8
+                    // omega_z =  2sin(x)sin(y)cos(z) gives omega_z_hat = -sx*sy/4
+                    const Kokkos::complex<T> oxExact(sy * sz / T(8.0), T(0.0));
+                    const Kokkos::complex<T> oyExact(sx * sz / T(8.0), T(0.0));
+                    const Kokkos::complex<T> ozExact(-sx * sy / T(4.0), T(0.0));
 
                     const auto oxMode = ox(i, j, k);
                     const auto oyMode = oy(i, j, k);
