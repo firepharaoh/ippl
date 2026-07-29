@@ -314,6 +314,130 @@
         return globalDot / std::max(globalRef2, 1e-30);
     }
 
+    void logTGVSingleMode3D(const std::string& filename = "tgv_single_mode_3d.csv") {
+        auto ox = omega_x_hat_m.getView();
+        auto oy = omega_y_hat_m.getView();
+        auto oz = omega_z_hat_m.getView();
+        auto ux = ux_hat_m.getView();
+        auto uy = uy_hat_m.getView();
+        auto uz = uz_hat_m.getView();
+
+        auto& layout = omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = omega_x_hat_m.getNghost();
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
+
+        double localValues[12] = {};
+        Kokkos::parallel_reduce(
+            "tgv_single_mode_3d",
+            Kokkos::MDRangePolicy<Kokkos::Rank<3>>(
+                {nghost, nghost, nghost},
+                {static_cast<int>(ox.extent(0)) - nghost,
+                 static_cast<int>(ox.extent(1)) - nghost,
+                 static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k,
+                          double& oxRe, double& oxIm,
+                          double& oyRe, double& oyIm,
+                          double& ozRe, double& ozIm,
+                          double& uxRe, double& uxIm,
+                          double& uyRe, double& uyIm,
+                          double& uzRe, double& uzIm) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                if (mx == 1 && my == 1 && mz == 1) {
+                    const auto oxMode = ox(i, j, k);
+                    const auto oyMode = oy(i, j, k);
+                    const auto ozMode = oz(i, j, k);
+                    const auto uxMode = ux(i, j, k);
+                    const auto uyMode = uy(i, j, k);
+                    const auto uzMode = uz(i, j, k);
+                    oxRe += oxMode.real();
+                    oxIm += oxMode.imag();
+                    oyRe += oyMode.real();
+                    oyIm += oyMode.imag();
+                    ozRe += ozMode.real();
+                    ozIm += ozMode.imag();
+                    uxRe += uxMode.real();
+                    uxIm += uxMode.imag();
+                    uyRe += uyMode.real();
+                    uyIm += uyMode.imag();
+                    uzRe += uzMode.real();
+                    uzIm += uzMode.imag();
+                }
+            },
+            Kokkos::Sum<double>(localValues[0]),
+            Kokkos::Sum<double>(localValues[1]),
+            Kokkos::Sum<double>(localValues[2]),
+            Kokkos::Sum<double>(localValues[3]),
+            Kokkos::Sum<double>(localValues[4]),
+            Kokkos::Sum<double>(localValues[5]),
+            Kokkos::Sum<double>(localValues[6]),
+            Kokkos::Sum<double>(localValues[7]),
+            Kokkos::Sum<double>(localValues[8]),
+            Kokkos::Sum<double>(localValues[9]),
+            Kokkos::Sum<double>(localValues[10]),
+            Kokkos::Sum<double>(localValues[11]));
+
+        double values[12] = {};
+        for (int n = 0; n < 12; ++n) {
+            ippl::Comm->allreduce(localValues[n], values[n], 1, std::plus<double>());
+        }
+
+        const double volume = (rmax_m[0] - rmin_m[0])
+                            * (rmax_m[1] - rmin_m[1])
+                            * (rmax_m[2] - rmin_m[2]);
+        const double expected[12] = {
+            volume / 8.0, 0.0,
+            volume / 8.0, 0.0,
+            -volume / 4.0, 0.0,
+            0.0, -1.0 / 8.0,
+            0.0, 1.0 / 8.0,
+            0.0, 0.0
+        };
+
+        if (ippl::Comm->rank() == 0) {
+            const bool firstWrite = !tgv_single_mode_3d_initialized_m;
+            std::ofstream out(diagnosticFileName(filename),
+                              firstWrite ? std::ios::out : std::ios::app);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+
+            if (firstWrite) {
+                out << "method,dt,step,time,mode_x,mode_y,mode_z,"
+                    << "omega_x_re,omega_x_im,omega_x_expected_re,omega_x_expected_im,"
+                    << "omega_y_re,omega_y_im,omega_y_expected_re,omega_y_expected_im,"
+                    << "omega_z_re,omega_z_im,omega_z_expected_re,omega_z_expected_im,"
+                    << "u_x_re,u_x_im,u_x_expected_re,u_x_expected_im,"
+                    << "u_y_re,u_y_im,u_y_expected_re,u_y_expected_im,"
+                    << "u_z_re,u_z_im,u_z_expected_re,u_z_expected_im\n";
+            }
+
+            out << method_m << "," << dt_m << "," << it_m << "," << time_m << ",1,1,1";
+            for (int n = 0; n < 12; n += 2) {
+                out << "," << values[n] << "," << values[n + 1]
+                    << "," << expected[n] << "," << expected[n + 1];
+            }
+            out << "\n";
+
+            Inform m("tgv_single_mode_3d ");
+            m << "omega_x = (" << values[0] << ", " << values[1]
+              << "), omega_y = (" << values[2] << ", " << values[3]
+              << "), omega_z = (" << values[4] << ", " << values[5]
+              << "), u_x = (" << values[6] << ", " << values[7]
+              << "), u_y = (" << values[8] << ", " << values[9]
+              << "), u_z = (" << values[10] << ", " << values[11] << ")" << endl;
+        }
+
+        tgv_single_mode_3d_initialized_m = true;
+    }
+
     void logSpectralDiagnostics3D(
         const std::string& filename = "spectral_diagnostics_3d.csv") {
         const double energy = computeSpectralEnergy3D();
