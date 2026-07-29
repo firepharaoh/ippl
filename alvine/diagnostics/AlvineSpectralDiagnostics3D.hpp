@@ -179,11 +179,79 @@
         return computeSpectralDivergenceL23D();
     }
 
+    double computeTGVSpectralVelocityProjectionScale3D() {
+        auto ux = ux_hat_m.getView();
+        auto uy = uy_hat_m.getView();
+        auto uz = uz_hat_m.getView();
+
+        auto& layout = ux_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = ux_hat_m.getNghost();
+
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
+
+        double localDot = 0.0;
+        double localRef2 = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_reduce(
+            "tgv_spectral_velocity_projection_scale_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ux.extent(0)) - nghost,
+                         static_cast<int>(ux.extent(1)) - nghost,
+                         static_cast<int>(ux.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k,
+                          double& dot, double& ref2) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                if ((mx == 1 || mx == -1) && (my == 1 || my == -1) &&
+                    (mz == 1 || mz == -1)) {
+                    const T sx = mx > 0 ? T(1.0) : T(-1.0);
+                    const T sy = my > 0 ? T(1.0) : T(-1.0);
+
+                    // For u = sin(x)cos(y)cos(z), v = -cos(x)sin(y)cos(z):
+                    // u_hat = -i sign(mx)/8, v_hat = i sign(my)/8, w_hat = 0.
+                    const Kokkos::complex<T> uxExact(T(0.0), -sx / T(8.0));
+                    const Kokkos::complex<T> uyExact(T(0.0), sy / T(8.0));
+                    const Kokkos::complex<T> uzExact(T(0.0), T(0.0));
+
+                    const auto uxMode = ux(i, j, k);
+                    const auto uyMode = uy(i, j, k);
+                    const auto uzMode = uz(i, j, k);
+
+                    dot += uxMode.real() * uxExact.real() + uxMode.imag() * uxExact.imag()
+                         + uyMode.real() * uyExact.real() + uyMode.imag() * uyExact.imag()
+                         + uzMode.real() * uzExact.real() + uzMode.imag() * uzExact.imag();
+                    ref2 += uxExact.real() * uxExact.real() + uxExact.imag() * uxExact.imag()
+                          + uyExact.real() * uyExact.real() + uyExact.imag() * uyExact.imag()
+                          + uzExact.real() * uzExact.real() + uzExact.imag() * uzExact.imag();
+                }
+            },
+            Kokkos::Sum<double>(localDot),
+            Kokkos::Sum<double>(localRef2));
+
+        double globalDot = 0.0;
+        double globalRef2 = 0.0;
+        ippl::Comm->allreduce(localDot, globalDot, 1, std::plus<double>());
+        ippl::Comm->allreduce(localRef2, globalRef2, 1, std::plus<double>());
+
+        return globalDot / std::max(globalRef2, 1e-30);
+    }
+
     void logSpectralDiagnostics3D(
         const std::string& filename = "spectral_diagnostics_3d.csv") {
         const double energy = computeSpectralEnergy3D();
         const double enstrophy = computeSpectralEnstrophy3D();
         const double divergenceL2 = computeSpectralDivergenceL23D();
+        const double spectralVelocityProjectionScale =
+            computeTGVSpectralVelocityProjectionScale3D();
 
         const double pi = std::acos(-1.0);
         const double exactEnergy = pi * pi * pi;
@@ -205,13 +273,15 @@
             if (firstWrite) {
                 out << "method,dt,step,time,spectral_energy,spectral_energy_rel_error,"
                     << "spectral_enstrophy,spectral_enstrophy_rel_error,"
-                    << "spectral_divergence_l2,spectral_divergence_normalized\n";
+                    << "spectral_divergence_l2,spectral_divergence_normalized,"
+                    << "spectral_velocity_projection_scale\n";
             }
 
             out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
                 << energy << "," << energyRelError << ","
                 << enstrophy << "," << enstrophyRelError << ","
-                << divergenceL2 << "," << divergenceNormalized << "\n";
+                << divergenceL2 << "," << divergenceNormalized << ","
+                << spectralVelocityProjectionScale << "\n";
 
             Inform m("spectral_diagnostics_3d ");
             m << "energy = " << energy
@@ -219,7 +289,9 @@
               << ", enstrophy = " << enstrophy
               << ", enstrophyRelError = " << enstrophyRelError
               << ", divergenceL2 = " << divergenceL2
-              << ", divergenceNormalized = " << divergenceNormalized << endl;
+              << ", divergenceNormalized = " << divergenceNormalized
+              << ", spectralVelocityProjectionScale = "
+              << spectralVelocityProjectionScale << endl;
         }
 
         spectral_3d_diagnostics_initialized_m = true;
