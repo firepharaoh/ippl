@@ -11,6 +11,7 @@
 #include "fields/FieldContainer.hpp"
 #include "particles/ParticleContainer.hpp"
 #include "test_cases/TaylorGreen3D.hpp"
+#include "VtkDump.hpp"
 
 template <typename T>
 class VortexInFourier3DManager : public AlvineManager<T, 3> {
@@ -224,6 +225,20 @@ public:
     void par2grid() override {}
 
     void grid2par() override {}
+
+    void dump() override {
+        static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
+        IpplTimings::startTimer(dumpTimer);
+
+        this->spectralScatter3D();
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+
+        alvine::vtk::writeVectorField3D("data/VortexInFourier3D", "omega",
+                                        this->fcontainer_m->getOmegaField(), this->rmin_m,
+                                        this->hr_m, this->it_m);
+
+        IpplTimings::stopTimer(dumpTimer);
+    }
 
     void initializeParticles() {
         auto& FL = this->fcontainer_m->getFL();

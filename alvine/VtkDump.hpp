@@ -174,6 +174,56 @@ void writeVectorField2D(const std::string& outputDir, const std::string& name, F
     }
 }
 
+template <typename FieldType, typename VectorType>
+void writeVectorField3D(const std::string& outputDir, const std::string& name, FieldType& field,
+                        const VectorType& origin, const VectorType& spacing, int step) {
+    static_assert(FieldType::dim == 3, "Legacy Alvine VTK output expects a 3D field.");
+
+    ensureOutputDirectory(outputDir);
+
+    auto host = field.getHostMirror();
+    Kokkos::deep_copy(host, field.getView());
+
+    const auto& local = field.getLayout().getLocalNDIndex();
+    const int nghost = field.getNghost();
+    const int nx = local[0].last() - local[0].first() + 1;
+    const int ny = local[1].last() - local[1].first() + 1;
+    const int nz = local[2].last() - local[2].first() + 1;
+
+    const auto file = legacyFileName(outputDir, name, step);
+    std::ofstream vtkout(file, std::ios::out);
+    if (!vtkout) {
+        throw std::runtime_error("Could not open VTK file: " + file.string());
+    }
+
+    vtkout.precision(10);
+    vtkout.setf(std::ios::scientific, std::ios::floatfield);
+
+    vtkout << "# vtk DataFile Version 2.0\n";
+    vtkout << name << "\n";
+    vtkout << "ASCII\n";
+    vtkout << "DATASET STRUCTURED_POINTS\n";
+    vtkout << "DIMENSIONS " << nx + 1 << " " << ny + 1 << " " << nz + 1 << "\n";
+    vtkout << "ORIGIN " << origin[0] + local[0].first() * spacing[0] << " "
+           << origin[1] + local[1].first() * spacing[1] << " "
+           << origin[2] + local[2].first() * spacing[2] << "\n";
+    vtkout << "SPACING " << spacing[0] << " " << spacing[1] << " " << spacing[2] << "\n";
+    vtkout << "CELL_DATA " << nx * ny * nz << "\n";
+    vtkout << "VECTORS " << name << " float\n";
+
+    for (int k = local[2].first(); k <= local[2].last(); ++k) {
+        for (int j = local[1].first(); j <= local[1].last(); ++j) {
+            for (int i = local[0].first(); i <= local[0].last(); ++i) {
+                const int li = i - local[0].first() + nghost;
+                const int lj = j - local[1].first() + nghost;
+                const int lk = k - local[2].first() + nghost;
+                vtkout << host(li, lj, lk)[0] << "\t" << host(li, lj, lk)[1] << "\t"
+                       << host(li, lj, lk)[2] << "\n";
+            }
+        }
+    }
+}
+
 template <typename ComplexFieldType, typename VectorType>
 void writeFourierMagnitudeField2D(const std::string& outputDir, const std::string& name,
                                   ComplexFieldType& field, const VectorType& lengths, int step) {
