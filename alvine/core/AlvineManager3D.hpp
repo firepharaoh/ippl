@@ -76,9 +76,7 @@ protected:
     ComplexField_t viscosity_y_hat_m;
     ComplexField_t viscosity_z_hat_m;
     RealField_t Sk_m;
-    bool biot_savart_3d_debug_initialized_m = false;
     bool spectral_3d_diagnostics_initialized_m = false;
-    bool tgv_single_mode_3d_initialized_m = false;
     bool tgv_3d_diagnostics_initialized_m = false;
 
 public:

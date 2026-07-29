@@ -70,7 +70,6 @@ public:
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
         this->logSpectralDiagnostics3D();
-        this->logTGVSingleMode3D();
         this->logTaylorGreenDiagnostics3D();
     }
 
