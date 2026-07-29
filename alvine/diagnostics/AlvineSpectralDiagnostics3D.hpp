@@ -448,6 +448,10 @@
         const double spectralVorticityProjectionScale =
             computeTGVSpectralVorticityProjectionScale3D();
 
+        const double Lx = rmax_m[0] - rmin_m[0];
+        const double Ly = rmax_m[1] - rmin_m[1];
+        const double Lz = rmax_m[2] - rmin_m[2];
+        const double volume = Lx * Ly * Lz;
         const double pi = std::acos(-1.0);
         const double exactEnergy = pi * pi * pi;
         const double exactEnstrophy = 3.0 * pi * pi * pi;
@@ -470,7 +474,8 @@
                     << "spectral_enstrophy,spectral_enstrophy_rel_error,"
                     << "spectral_divergence_l2,spectral_divergence_normalized,"
                     << "spectral_velocity_projection_scale,"
-                    << "spectral_vorticity_projection_scale\n";
+                    << "spectral_vorticity_projection_scale,"
+                    << "Lx,Ly,Lz,volume\n";
             }
 
             out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
@@ -478,7 +483,8 @@
                 << enstrophy << "," << enstrophyRelError << ","
                 << divergenceL2 << "," << divergenceNormalized << ","
                 << spectralVelocityProjectionScale << ","
-                << spectralVorticityProjectionScale << "\n";
+                << spectralVorticityProjectionScale << ","
+                << Lx << "," << Ly << "," << Lz << "," << volume << "\n";
 
             Inform m("spectral_diagnostics_3d ");
             m << "energy = " << energy
@@ -490,7 +496,9 @@
               << ", spectralVelocityProjectionScale = "
               << spectralVelocityProjectionScale
               << ", spectralVorticityProjectionScale = "
-              << spectralVorticityProjectionScale << endl;
+              << spectralVorticityProjectionScale
+              << ", L = (" << Lx << ", " << Ly << ", " << Lz
+              << "), volume = " << volume << endl;
         }
 
         spectral_3d_diagnostics_initialized_m = true;
