@@ -66,11 +66,159 @@ public:
     }
 
     void advance() override {
-        this->spectralSolveParticles();
+        if (this->useRK4()) {
+            RK4Step();
+        } else {
+            LeapFrogStep();
+        }
+    }
+
+    void computeSpectralParticleVelocity(bool diagnostics) {
+        static IpplTimings::TimerRef PTimer = IpplTimings::getTimer("pushVelocity");
+        static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
+        static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
+
+        IpplTimings::startTimer(par2gridTimer);
+        this->spectralScatter3D();
+        IpplTimings::stopTimer(par2gridTimer);
+
+        IpplTimings::startTimer(SolveTimer);
+        this->computeSpectralVelocityModes3D();
+        IpplTimings::stopTimer(SolveTimer);
+
+        IpplTimings::startTimer(PTimer);
+        if (diagnostics) {
+            this->logSpectralDiagnostics3D();
+            this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+            this->logTaylorGreenDiagnostics3D();
+        }
+        IpplTimings::stopTimer(PTimer);
+
+        IpplTimings::startTimer(grid2parTimer);
+        this->spectralGather3D();
+        IpplTimings::stopTimer(grid2parTimer);
+    }
+
+    void RK4Step() {
+        static IpplTimings::TimerRef RTimer = IpplTimings::getTimer("rk4PushPosition");
+        static IpplTimings::TimerRef updateTimer = IpplTimings::getTimer("update");
+
+        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
+        const T dt = this->dt_m;
+
+        pc->rk4_R0 = pc->R;
+
+        computeSpectralParticleVelocity(true);
+        pc->rk4_k1 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k1;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeSpectralParticleVelocity(false);
+        pc->rk4_k2 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k2;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeSpectralParticleVelocity(false);
+        pc->rk4_k3 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
+        IpplTimings::stopTimer(RTimer);
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeSpectralParticleVelocity(false);
+        pc->rk4_k4 = pc->P;
+
+        IpplTimings::startTimer(RTimer);
+        pc->R_old = pc->rk4_R0;
+        pc->R = pc->rk4_R0 + (dt / 6.0) *
+                              (pc->rk4_k1 + 2.0 * pc->rk4_k2 + 2.0 * pc->rk4_k3 + pc->rk4_k4);
+        IpplTimings::stopTimer(RTimer);
+
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        if (this->viscosity_m > 0.0) {
+            this->spectralScatter3D();
+            this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->computeSpectralViscosityModes3D();
+            this->spectralGatherViscosity3D();
+            this->applyParticleViscosity3D();
+        }
+    }
+
+    void LeapFrogStep() {
+        static IpplTimings::TimerRef PTimer = IpplTimings::getTimer("pushVelocity");
+        static IpplTimings::TimerRef RTimer = IpplTimings::getTimer("pushPosition");
+        static IpplTimings::TimerRef updateTimer = IpplTimings::getTimer("update");
+        static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
+        static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
+
+        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
+
+        IpplTimings::startTimer(par2gridTimer);
+        this->spectralScatter3D();
+        IpplTimings::stopTimer(par2gridTimer);
+
+        IpplTimings::startTimer(SolveTimer);
+        this->computeSpectralVelocityModes3D();
+        IpplTimings::stopTimer(SolveTimer);
+
+        IpplTimings::startTimer(PTimer);
+        this->logSpectralDiagnostics3D();
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
-        this->logSpectralDiagnostics3D();
         this->logTaylorGreenDiagnostics3D();
+        IpplTimings::stopTimer(PTimer);
+
+        IpplTimings::startTimer(grid2parTimer);
+        this->spectralGather3D();
+        IpplTimings::stopTimer(grid2parTimer);
+
+        if (this->viscosity_m > 0.0) {
+            this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
+            this->computeSpectralViscosityModes3D();
+            this->spectralGatherViscosity3D();
+            this->applyParticleViscosity3D();
+        }
+
+        IpplTimings::startTimer(RTimer);
+        if (this->it_m == 0) {
+            pc->R_old = pc->R;
+            pc->R = pc->R + pc->P * this->dt_m;
+        } else {
+            typename ippl::ParticleBase<
+                ippl::ParticleSpatialLayout<T, Dim>>::particle_position_type R_old_temp =
+                pc->R_old;
+
+            pc->R_old = pc->R;
+            pc->R = R_old_temp + 2 * pc->P * this->dt_m;
+        }
+        IpplTimings::stopTimer(RTimer);
+
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
     }
 
     void par2grid() override {}
