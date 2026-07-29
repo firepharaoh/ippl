@@ -82,10 +82,20 @@ public:
 
         IpplTimings::startTimer(par2gridTimer);
         this->spectralScatter3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_x_hat_m);
+            this->Hou_Li_filter(this->omega_y_hat_m);
+            this->Hou_Li_filter(this->omega_z_hat_m);
+        }
         IpplTimings::stopTimer(par2gridTimer);
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+            this->Hou_Li_filter(this->uz_hat_m);
+        }
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
@@ -156,6 +166,11 @@ public:
 
         if (this->viscosity_m > 0.0) {
             this->spectralScatter3D();
+            if (this->useHouLiFilter()) {
+                this->Hou_Li_filter(this->omega_x_hat_m);
+                this->Hou_Li_filter(this->omega_y_hat_m);
+                this->Hou_Li_filter(this->omega_z_hat_m);
+            }
             this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
@@ -177,10 +192,20 @@ public:
 
         IpplTimings::startTimer(par2gridTimer);
         this->spectralScatter3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_x_hat_m);
+            this->Hou_Li_filter(this->omega_y_hat_m);
+            this->Hou_Li_filter(this->omega_z_hat_m);
+        }
         IpplTimings::stopTimer(par2gridTimer);
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+            this->Hou_Li_filter(this->uz_hat_m);
+        }
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
@@ -231,6 +256,11 @@ public:
         IpplTimings::startTimer(dumpTimer);
 
         this->spectralScatter3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_x_hat_m);
+            this->Hou_Li_filter(this->omega_y_hat_m);
+            this->Hou_Li_filter(this->omega_z_hat_m);
+        }
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
 
         alvine::vtk::writeVectorField3D("data/VortexInFourier3D", "omega",

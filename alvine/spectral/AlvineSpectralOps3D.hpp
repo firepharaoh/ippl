@@ -58,6 +58,51 @@
         spectralScatter3D();
     }
 
+    void Hou_Li_filter(ComplexField_t& modes, double alpha = 36.0, int exponent = 36) {
+        auto view = modes.getView();
+
+        auto& layout = modes.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const int nghost = modes.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const int Nz = domain[2].length();
+        const T kxMax = T(Nx) / T(2.0);
+        const T kyMax = T(Ny) / T(2.0);
+        const T kzMax = T(Nz) / T(2.0);
+        const T invSqrtDim = T(1.0) / Kokkos::sqrt(T(3.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "hou_li_filter_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(view.extent(0)) - nghost,
+                         static_cast<int>(view.extent(1)) - nghost,
+                         static_cast<int>(view.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const T kx = (gx <= Nx / 2) ? T(gx) : T(gx - Nx);
+                const T ky = (gy <= Ny / 2) ? T(gy) : T(gy - Ny);
+                const T kz = (gz <= Nz / 2) ? T(gz) : T(gz - Nz);
+
+                const T etaX = Kokkos::abs(kx) / kxMax;
+                const T etaY = Kokkos::abs(ky) / kyMax;
+                const T etaZ = Kokkos::abs(kz) / kzMax;
+                const T eta =
+                    Kokkos::sqrt(etaX * etaX + etaY * etaY + etaZ * etaZ) * invSqrtDim;
+                const T filterFactor =
+                    Kokkos::exp(-T(alpha) * Kokkos::pow(eta, exponent));
+
+                view(i, j, k) *= filterFactor;
+            });
+        Kokkos::fence();
+    }
+
     void computeSpectralVelocityModes3D() {
         auto ox = omega_x_hat_m.getView();
         auto oy = omega_y_hat_m.getView();
@@ -244,7 +289,17 @@
 
     void spectralSolveParticles() {
         spectralScatter3D();
+        if (useHouLiFilter()) {
+            Hou_Li_filter(omega_x_hat_m);
+            Hou_Li_filter(omega_y_hat_m);
+            Hou_Li_filter(omega_z_hat_m);
+        }
         computeSpectralVelocityModes3D();
+        if (useHouLiFilter()) {
+            Hou_Li_filter(ux_hat_m);
+            Hou_Li_filter(uy_hat_m);
+            Hou_Li_filter(uz_hat_m);
+        }
         spectralGather3D();
     }
 

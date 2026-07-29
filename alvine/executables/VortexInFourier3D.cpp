@@ -25,7 +25,7 @@ int main(int argc, char* argv[]) {
 
         if (argc < 8) {
             msg << "Usage: VortexInFourier3D nx ny nz np nt solver dump_freq "
-                   "[--dt dt] [--method label] [--filter 0|1] "
+                   "[--dt dt] [--method label] [--filter 0|1|2] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--overallocate value] [--info level]"
                 << endl;
@@ -90,9 +90,9 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
-        if (spectral_filter < 0 || spectral_filter > 1) {
+        if (spectral_filter < 0 || spectral_filter > 2) {
             msg << "Invalid --filter value " << spectral_filter
-                << ". Use 0:no filter or 1:shape function for this smoke target." << endl;
+                << ". Use 0:no filter, 1:shape function, 2:Hou-Li." << endl;
             ippl::Comm->abort();
         }
 
