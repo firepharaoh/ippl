@@ -72,6 +72,16 @@ protected:
     ComplexField_t uy_hat_m;
     ComplexField_t uz_hat_m;
 
+    ComplexField_t duxdx_hat_m;
+    ComplexField_t duxdy_hat_m;
+    ComplexField_t duxdz_hat_m;
+    ComplexField_t duydx_hat_m;
+    ComplexField_t duydy_hat_m;
+    ComplexField_t duydz_hat_m;
+    ComplexField_t duzdx_hat_m;
+    ComplexField_t duzdy_hat_m;
+    ComplexField_t duzdz_hat_m;
+
     ComplexField_t viscosity_x_hat_m;
     ComplexField_t viscosity_y_hat_m;
     ComplexField_t viscosity_z_hat_m;

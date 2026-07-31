@@ -21,6 +21,15 @@ public:
         ippl::ParticleAttrib<T> ux;
         ippl::ParticleAttrib<T> uy;
         ippl::ParticleAttrib<T> uz;
+        ippl::ParticleAttrib<T> duxdx;
+        ippl::ParticleAttrib<T> duxdy;
+        ippl::ParticleAttrib<T> duxdz;
+        ippl::ParticleAttrib<T> duydx;
+        ippl::ParticleAttrib<T> duydy;
+        ippl::ParticleAttrib<T> duydz;
+        ippl::ParticleAttrib<T> duzdx;
+        ippl::ParticleAttrib<T> duzdy;
+        ippl::ParticleAttrib<T> duzdz;
         particle_position_type u; // 3D vector velocity storage for component-based or vector gather paths.
         particle_position_type R_old;
         particle_position_type rk4_R0;
@@ -64,6 +73,15 @@ public:
         this->addAttribute(ux);
         this->addAttribute(uy);
         this->addAttribute(uz);
+        this->addAttribute(duxdx);
+        this->addAttribute(duxdy);
+        this->addAttribute(duxdz);
+        this->addAttribute(duydx);
+        this->addAttribute(duydy);
+        this->addAttribute(duydz);
+        this->addAttribute(duzdx);
+        this->addAttribute(duzdy);
+        this->addAttribute(duzdz);
         this->addAttribute(u);
         this->addAttribute(R_old);
         this->addAttribute(rk4_R0);

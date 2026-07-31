@@ -187,6 +187,10 @@ public:
         static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
         static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
+        static IpplTimings::TimerRef gradientGatherTimer =
+            IpplTimings::getTimer("spectralGradientGather");
+        static IpplTimings::TimerRef stretchingTimer =
+            IpplTimings::getTimer("vortexStretching");
 
         std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
@@ -206,6 +210,7 @@ public:
             this->Hou_Li_filter(this->uy_hat_m);
             this->Hou_Li_filter(this->uz_hat_m);
         }
+        this->computeSpectralVelocityGradientModes3D();
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
@@ -214,6 +219,14 @@ public:
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
         this->logTaylorGreenDiagnostics3D();
         IpplTimings::stopTimer(PTimer);
+
+        IpplTimings::startTimer(gradientGatherTimer);
+        this->spectralGatherGradientModes3D();
+        IpplTimings::stopTimer(gradientGatherTimer);
+
+        IpplTimings::startTimer(stretchingTimer);
+        this->applyParticleVortexStretching3D();
+        IpplTimings::stopTimer(stretchingTimer);
 
         IpplTimings::startTimer(grid2parTimer);
         this->spectralGather3D();

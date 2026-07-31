@@ -563,4 +563,186 @@
         reconstructSpectralVelocity3D(uField);
     }
 
+    void computeSpectralVelocityGradientModes3D() {
+        auto ux = ux_hat_m.getView();
+        auto uy = uy_hat_m.getView();
+        auto uz = uz_hat_m.getView();
+
+        auto duxdx = duxdx_hat_m.getView();
+        auto duxdy = duxdy_hat_m.getView();
+        auto duxdz = duxdz_hat_m.getView();
+        auto duydx = duydx_hat_m.getView();
+        auto duydy = duydy_hat_m.getView();
+        auto duydz = duydz_hat_m.getView();
+        auto duzdx = duzdx_hat_m.getView();
+        auto duzdy = duzdy_hat_m.getView();
+        auto duzdz = duzdz_hat_m.getView();
+
+        auto& layout = ux_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = ux_hat_m.getNghost();
+
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
+
+        const T Lx = rmax_m[0] - rmin_m[0];
+        const T Ly = rmax_m[1] - rmin_m[1];
+        const T Lz = rmax_m[2] - rmin_m[2];
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const Kokkos::complex<T> imag(0.0, 1.0);
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "compute_spectral_velocity_gradient_modes_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ux.extent(0)) - nghost,
+                         static_cast<int>(ux.extent(1)) - nghost,
+                         static_cast<int>(ux.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+
+                duxdx(i, j, k) = imag * kx * ux(i, j, k);
+                duxdy(i, j, k) = imag * ky * ux(i, j, k);
+                duxdz(i, j, k) = imag * kz * ux(i, j, k);
+
+                duydx(i, j, k) = imag * kx * uy(i, j, k);
+                duydy(i, j, k) = imag * ky * uy(i, j, k);
+                duydz(i, j, k) = imag * kz * uy(i, j, k);
+
+                duzdx(i, j, k) = imag * kx * uz(i, j, k);
+                duzdy(i, j, k) = imag * ky * uz(i, j, k);
+                duzdz(i, j, k) = imag * kz * uz(i, j, k);
+            });
+        Kokkos::fence();
+    }
+
+
+    void spectralGatherGradientModes3D() {
+        if (!nufftType2_mp) {
+            throw std::runtime_error("AlvineManager3D::spectralGatherGradientModes3D called before initNUFFT3D");
+        }
+
+        auto& pc = *this->pcontainer_m;
+
+        pc.duxdx = 0.0;
+        pc.duxdy = 0.0;
+        pc.duxdz = 0.0;
+        pc.duydx = 0.0;
+        pc.duydy = 0.0;
+        pc.duydz = 0.0;
+        pc.duzdx = 0.0;
+        pc.duzdy = 0.0;
+        pc.duzdz = 0.0;
+
+        auto duxdxModes = duxdx_hat_m.deepCopy();
+        auto duxdyModes = duxdy_hat_m.deepCopy();
+        auto duxdzModes = duxdz_hat_m.deepCopy();
+        auto duydxModes = duydx_hat_m.deepCopy();
+        auto duydyModes = duydy_hat_m.deepCopy();
+        auto duydzModes = duydz_hat_m.deepCopy();
+        auto duzdxModes = duzdx_hat_m.deepCopy();
+        auto duzdyModes = duzdy_hat_m.deepCopy();
+        auto duzdzModes = duzdz_hat_m.deepCopy();
+
+        if (useShapeFunctionFilter()) {
+            auto shapeView = Sk_m.getView();
+            const int nghost = duxdxModes.getNghost();
+            auto duxdxView = duxdxModes.getView();
+            auto duxdyView = duxdyModes.getView();
+            auto duxdzView = duxdzModes.getView();
+            auto duydxView = duydxModes.getView();
+            auto duydyView = duydyModes.getView();
+            auto duydzView = duydzModes.getView();
+            auto duzdxView = duzdxModes.getView();
+            auto duzdyView = duzdyModes.getView();
+            auto duzdzView = duzdzModes.getView();
+
+            using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+            Kokkos::parallel_for(
+                "shape_spectral_velocity_gradient_modes_3d",
+                policy_type({nghost, nghost, nghost},
+                            {static_cast<int>(duxdxView.extent(0)) - nghost,
+                             static_cast<int>(duxdxView.extent(1)) - nghost,
+                             static_cast<int>(duxdxView.extent(2)) - nghost}),
+                KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                    const auto shape = shapeView(i, j, k);
+                    duxdxView(i, j, k) *= shape;
+                    duxdyView(i, j, k) *= shape;
+                    duxdzView(i, j, k) *= shape;
+                    duydxView(i, j, k) *= shape;
+                    duydyView(i, j, k) *= shape;
+                    duydzView(i, j, k) *= shape;
+                    duzdxView(i, j, k) *= shape;
+                    duzdyView(i, j, k) *= shape;
+                    duzdzView(i, j, k) *= shape;
+                });
+            Kokkos::fence();
+        }
+
+        nufftType2_mp->transform(pc.R, pc.duxdx, duxdxModes);
+        nufftType2_mp->transform(pc.R, pc.duxdy, duxdyModes);
+        nufftType2_mp->transform(pc.R, pc.duxdz, duxdzModes);
+        nufftType2_mp->transform(pc.R, pc.duydx, duydxModes);
+        nufftType2_mp->transform(pc.R, pc.duydy, duydyModes);
+        nufftType2_mp->transform(pc.R, pc.duydz, duydzModes);
+        nufftType2_mp->transform(pc.R, pc.duzdx, duzdxModes);
+        nufftType2_mp->transform(pc.R, pc.duzdy, duzdyModes);
+        nufftType2_mp->transform(pc.R, pc.duzdz, duzdzModes);
+    }
+    void applyParticleVortexStretching3D() {
+        auto& pc = *this->pcontainer_m;
+        auto omega = pc.omega.getView();
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
+
+        const T dt = T(this->dt_m);
+        const auto n = pc.getLocalNum();
+
+        Kokkos::parallel_for(
+            "apply_particle_vortex_stretching_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                const T omegaX = omega(p)[0];
+                const T omegaY = omega(p)[1];
+                const T omegaZ = omega(p)[2];
+
+                const T dUxdx = duxdx(p);
+                const T dUxdy = duxdy(p);
+                const T dUxdz = duxdz(p);
+                const T dUydx = duydx(p);
+                const T dUydy = duydy(p);
+                const T dUydz = duydz(p);
+                const T dUzdx = duzdx(p);
+                const T dUzdy = duzdy(p);
+                const T dUzdz = duzdz(p);
+
+                omega(p)[0] += dt * (omegaX * dUxdx + omegaY * dUxdy + omegaZ * dUxdz);
+                omega(p)[1] += dt * (omegaX * dUydx + omegaY * dUydy + omegaZ * dUydz);
+                omega(p)[2] += dt * (omegaX * dUzdx + omegaY * dUzdy + omegaZ * dUzdz);
+            });
+        Kokkos::fence();
+    }
 #endif

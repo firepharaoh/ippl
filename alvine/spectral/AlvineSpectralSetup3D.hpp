@@ -24,6 +24,16 @@ void initNUFFT3D(double tol = 1e-10) {
     uy_hat_m.initialize(mesh, FL);
     uz_hat_m.initialize(mesh, FL);
 
+    duxdx_hat_m.initialize(mesh, FL);
+    duxdy_hat_m.initialize(mesh, FL);
+    duxdz_hat_m.initialize(mesh, FL);
+    duydx_hat_m.initialize(mesh, FL);
+    duydy_hat_m.initialize(mesh, FL);
+    duydz_hat_m.initialize(mesh, FL);
+    duzdx_hat_m.initialize(mesh, FL);
+    duzdy_hat_m.initialize(mesh, FL);
+    duzdz_hat_m.initialize(mesh, FL);
+
     viscosity_x_hat_m.initialize(mesh, FL);
     viscosity_y_hat_m.initialize(mesh, FL);
     viscosity_z_hat_m.initialize(mesh, FL);
