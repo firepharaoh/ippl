@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
         IpplTimings::startTimer(mainTimer);
 
         if (argc < 8) {
-            msg << "Usage: VortexInFourier3D nx ny nz np nt solver dump_freq "
+            msg << "Usage: VortexInFourier3D nx ny nz np nt solver dump_freq [remesh_freq] "
                    "[--dt dt] [--method label] [--filter 0|1|2] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--overallocate value] [--info level]"
@@ -50,6 +50,9 @@ int main(int argc, char* argv[]) {
         double viscosity = 0.0;
         std::string time_integrator = "leapfrog";
         int remesh_freq = 0;
+        if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
+            remesh_freq = std::atoi(argv[arg++]);
+        }
 
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -63,6 +66,10 @@ int main(int argc, char* argv[]) {
                 spectral_filter = std::atoi(argv[arg++]);
             } else if (option == "--viscosity" && arg < static_cast<unsigned>(argc)) {
                 viscosity = std::atof(argv[arg++]);
+                if (viscosity < 0.0) {
+                    msg << "Viscosity must be non-negative." << endl;
+                    ippl::Comm->abort();
+                }
             } else if (option == "--remesh-freq" && arg < static_cast<unsigned>(argc)) {
                 remesh_freq = std::atoi(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
@@ -70,6 +77,27 @@ int main(int argc, char* argv[]) {
                 std::transform(time_integrator.begin(), time_integrator.end(),
                                time_integrator.begin(),
                                [](unsigned char c) { return std::tolower(c); });
+            } else if (option == "--dt") {
+                msg << "Missing value after --dt" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--method") {
+                msg << "Missing value after --method" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--test-case") {
+                msg << "Missing value after --test-case" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--filter") {
+                msg << "Missing value after --filter" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--viscosity") {
+                msg << "Missing value after --viscosity" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--remesh-freq") {
+                msg << "Missing value after --remesh-freq" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--integrator") {
+                msg << "Missing value after --integrator" << endl;
+                ippl::Comm->abort();
             } else if ((option == "--overallocate" || option == "-b" || option == "--info"
                         || option == "-i" || option == "--timer-fences")
                        && arg < static_cast<unsigned>(argc)) {
@@ -99,6 +127,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (time_integrator != "leapfrog" && time_integrator != "rk4") {
+            msg << "Invalid --integrator value " << time_integrator
+                << ". Use leapfrog or rk4." << endl;
+            ippl::Comm->abort();
+        }
+
         if (remesh_freq < 0) {
             msg << "Invalid --remesh-freq value " << remesh_freq
                 << ". Use 0 to disable remeshing or a positive frequency." << endl;
@@ -117,7 +151,8 @@ int main(int argc, char* argv[]) {
             << " Test case: " << test_case
             << " Spectral filter: " << spectral_filter
             << " viscosity: " << viscosity
-            << " Remesh frequency: " << remesh_freq << endl;
+            << " Remesh frequency: " << remesh_freq
+            << " Time integrator: " << time_integrator << endl;
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
                                             spectral_filter, viscosity, time_integrator,
