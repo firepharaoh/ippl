@@ -427,6 +427,10 @@ public:
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            remeshParticles3D();
+        }
     }
 
     void par2grid() override {}

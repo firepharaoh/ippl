@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
             msg << "Usage: VortexInFourier3D nx ny nz np nt solver dump_freq "
                    "[--dt dt] [--method label] [--filter 0|1|2] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
-                   "[--overallocate value] [--info level]"
+                   "[--remesh-freq frequency] [--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
         }
@@ -49,6 +49,7 @@ int main(int argc, char* argv[]) {
         int spectral_filter = 0;
         double viscosity = 0.0;
         std::string time_integrator = "leapfrog";
+        int remesh_freq = 0;
 
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -62,6 +63,8 @@ int main(int argc, char* argv[]) {
                 spectral_filter = std::atoi(argv[arg++]);
             } else if (option == "--viscosity" && arg < static_cast<unsigned>(argc)) {
                 viscosity = std::atof(argv[arg++]);
+            } else if (option == "--remesh-freq" && arg < static_cast<unsigned>(argc)) {
+                remesh_freq = std::atoi(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
                 time_integrator = argv[arg++];
                 std::transform(time_integrator.begin(), time_integrator.end(),
@@ -96,6 +99,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (remesh_freq < 0) {
+            msg << "Invalid --remesh-freq value " << remesh_freq
+                << ". Use 0 to disable remeshing or a positive frequency." << endl;
+            ippl::Comm->abort();
+        }
+
         Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
@@ -107,11 +116,12 @@ int main(int argc, char* argv[]) {
             << " Method: " << method
             << " Test case: " << test_case
             << " Spectral filter: " << spectral_filter
-            << " viscosity: " << viscosity << endl;
+            << " viscosity: " << viscosity
+            << " Remesh frequency: " << remesh_freq << endl;
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
                                             spectral_filter, viscosity, time_integrator,
-                                            rmin, rmax, origin);
+                                            rmin, rmax, origin, remesh_freq);
         manager.pre_run();
         manager.run(manager.getNt());
 
