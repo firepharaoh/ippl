@@ -232,10 +232,11 @@ public:
                 R_view(p)[2] = z;
                 R_old_view(p) = R_view(p);
 
-                omega_view(p) = omega_grid(li, lj, lk) * particle_volume;
-                omega_x_view(p) = omega_view(p)[0];
-                omega_y_view(p) = omega_view(p)[1];
-                omega_z_view(p) = omega_view(p)[2];
+                const auto omega_value = omega_grid(li, lj, lk) * particle_volume;
+                omega_view(p)   = omega_value;
+                omega_x_view(p) = omega_value[0];
+                omega_y_view(p) = omega_value[1];
+                omega_z_view(p) = omega_value[2];
                 P_view(p) = u_grid(li, lj, lk);
             });
 
