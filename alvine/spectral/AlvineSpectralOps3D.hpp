@@ -376,9 +376,13 @@
         pc.viscosity_y = 0.0;
         pc.viscosity_z = 0.0;
 
-        nufftType2_mp->transform(pc.R, pc.viscosity_x, viscosity_x_hat_m);
-        nufftType2_mp->transform(pc.R, pc.viscosity_y, viscosity_y_hat_m);
-        nufftType2_mp->transform(pc.R, pc.viscosity_z, viscosity_z_hat_m);
+        auto viscXModes = viscosity_x_hat_m.deepCopy();
+        auto viscYModes = viscosity_y_hat_m.deepCopy();
+        auto viscZModes = viscosity_z_hat_m.deepCopy();
+
+        nufftType2_mp->transform(pc.R, pc.viscosity_x, viscXModes);
+        nufftType2_mp->transform(pc.R, pc.viscosity_y, viscYModes);
+        nufftType2_mp->transform(pc.R, pc.viscosity_z, viscZModes);
 
         auto visc = pc.viscosity.getView();
         auto viscX = pc.viscosity_x.getView();
@@ -402,6 +406,9 @@
         auto& pc = *this->pcontainer_m;
         auto omega = pc.omega.getView();
         auto visc = pc.viscosity.getView();
+        auto omegaX = pc.omega_x.getView();
+        auto omegaY = pc.omega_y.getView();
+        auto omegaZ = pc.omega_z.getView();
         const T dt = T(this->dt_m);
         const auto n = pc.getLocalNum();
 
@@ -412,6 +419,9 @@
                 omega(p)[0] += dt * visc(p)[0];
                 omega(p)[1] += dt * visc(p)[1];
                 omega(p)[2] += dt * visc(p)[2];
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
             });
         Kokkos::fence();
     }

@@ -174,10 +174,21 @@ public:
         size_type lattice_local = nxp_local * nyp_local * nzp_local;
 
         auto pc = this->pcontainer_m;
-        size_type nlocal = pc->getLocalNum();
-        if (nlocal > lattice_local) {
-            nlocal = lattice_local;
+        const size_type old_nlocal = pc->getLocalNum();
+        if (old_nlocal > 0) {
+            Kokkos::View<bool*> invalid("vif_3d_remesh_invalid_particles", old_nlocal);
+            Kokkos::parallel_for(
+                "mark_vif_3d_remesh_particles_invalid",
+                old_nlocal,
+                KOKKOS_LAMBDA(const size_t p) {
+                    invalid(p) = true;
+                });
+            Kokkos::fence();
+            pc->destroy(invalid, old_nlocal);
         }
+        pc->create(lattice_local);
+
+        const size_type nlocal = pc->getLocalNum();
 
         const int nghost = this->fcontainer_m->getOmegaField().getNghost();
 
