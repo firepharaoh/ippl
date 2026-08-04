@@ -179,6 +179,68 @@
         return computeSpectralDivergenceL23D();
     }
 
+    double computeSpectralVorticityDivergenceL23D() {
+        auto ox = omega_x_hat_m.getView();
+        auto oy = omega_y_hat_m.getView();
+        auto oz = omega_z_hat_m.getView();
+
+        auto& layout = omega_x_hat_m.getLayout();
+
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = omega_x_hat_m.getNghost();
+
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
+
+        const T Lx = rmax_m[0] - rmin_m[0];
+        const T Ly = rmax_m[1] - rmin_m[1];
+        const T Lz = rmax_m[2] - rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const Kokkos::complex<T> imag(0.0, 1.0);
+
+        double localDiv2 = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_reduce(
+            "compute_spectral_vorticity_divergence_l2_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k, double& lsum) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+
+                const auto divHat =
+                    imag * (kx * ox(i, j, k) + ky * oy(i, j, k) + kz * oz(i, j, k));
+                lsum += divHat.real() * divHat.real() + divHat.imag() * divHat.imag();
+            },
+            localDiv2);
+
+        double globalDiv2 = 0.0;
+        ippl::Comm->allreduce(localDiv2, globalDiv2, 1, std::plus<double>());
+
+        // omega_*_hat_m stores raw type-1 NUFFT integral modes. Dividing by
+        // volume gives Fourier-series coefficients; Parseval then contributes
+        // one factor of volume, giving globalDiv2 / volume.
+        return std::sqrt(globalDiv2 / volume);
+    }
+
     double computeTGVSpectralVelocityProjectionScale3D() {
         auto ux = ux_hat_m.getView();
         auto uy = uy_hat_m.getView();
@@ -319,6 +381,7 @@
         const double energy = computeSpectralEnergy3D();
         const double enstrophy = computeSpectralEnstrophy3D();
         const double divergenceL2 = computeSpectralDivergenceL23D();
+        const double vorticityDivergenceL2 = computeSpectralVorticityDivergenceL23D();
         const double spectralVelocityProjectionScale =
             computeTGVSpectralVelocityProjectionScale3D();
         const double spectralVorticityProjectionScale =
@@ -337,6 +400,9 @@
             std::abs(enstrophy - exactEnstrophy) / std::max(exactEnstrophy, 1e-30);
         const double velocityL2 = std::sqrt(std::max(2.0 * energy, 1e-30));
         const double divergenceNormalized = divergenceL2 / velocityL2;
+        const double vorticityL2 = std::sqrt(std::max(2.0 * enstrophy, 1e-30));
+        const double vorticityDivergenceNormalized =
+            vorticityDivergenceL2 / vorticityL2;
 
         if (ippl::Comm->rank() == 0) {
             const bool firstWrite = !spectral_3d_diagnostics_initialized_m;
@@ -349,6 +415,8 @@
                 out << "method,dt,step,time,spectral_energy,spectral_energy_rel_error,"
                     << "spectral_enstrophy,spectral_enstrophy_rel_error,"
                     << "spectral_divergence_l2,spectral_divergence_normalized,"
+                    << "spectral_vorticity_divergence_l2,"
+                    << "spectral_vorticity_divergence_normalized,"
                     << "spectral_velocity_projection_scale,"
                     << "spectral_vorticity_projection_scale,"
                     << "Lx,Ly,Lz,volume\n";
@@ -358,6 +426,7 @@
                 << energy << "," << energyRelError << ","
                 << enstrophy << "," << enstrophyRelError << ","
                 << divergenceL2 << "," << divergenceNormalized << ","
+                << vorticityDivergenceL2 << "," << vorticityDivergenceNormalized << ","
                 << spectralVelocityProjectionScale << ","
                 << spectralVorticityProjectionScale << ","
                 << Lx << "," << Ly << "," << Lz << "," << volume << "\n";
@@ -369,6 +438,9 @@
               << ", enstrophyRelError = " << enstrophyRelError
               << ", divergenceL2 = " << divergenceL2
               << ", divergenceNormalized = " << divergenceNormalized
+              << ", vorticityDivergenceL2 = " << vorticityDivergenceL2
+              << ", vorticityDivergenceNormalized = "
+              << vorticityDivergenceNormalized
               << ", spectralVelocityProjectionScale = "
               << spectralVelocityProjectionScale
               << ", spectralVorticityProjectionScale = "
