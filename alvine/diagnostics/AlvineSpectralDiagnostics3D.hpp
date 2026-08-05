@@ -398,6 +398,32 @@
             std::abs(energy - exactEnergy) / std::max(exactEnergy, 1e-30);
         const double enstrophyRelError =
             std::abs(enstrophy - exactEnstrophy) / std::max(exactEnstrophy, 1e-30);
+        const double energyDissipationRate =
+            2.0 * viscosity_m * enstrophy;
+
+        if (!spectral_3d_dissipation_initialized_m) {
+            spectral_3d_initial_energy_m = energy;
+            spectral_3d_previous_time_m = time_m;
+            spectral_3d_previous_dissipation_rate_m = energyDissipationRate;
+            spectral_3d_cumulative_energy_dissipation_m = 0.0;
+            spectral_3d_dissipation_initialized_m = true;
+        } else {
+            const double dtDiagnostic = time_m - spectral_3d_previous_time_m;
+            if (dtDiagnostic > 0.0) {
+                spectral_3d_cumulative_energy_dissipation_m +=
+                    0.5 * (spectral_3d_previous_dissipation_rate_m
+                           + energyDissipationRate) * dtDiagnostic;
+            }
+            spectral_3d_previous_time_m = time_m;
+            spectral_3d_previous_dissipation_rate_m = energyDissipationRate;
+        }
+
+        const double energyLoss = spectral_3d_initial_energy_m - energy;
+        const double energyDissipationBalanceError =
+            energyLoss - spectral_3d_cumulative_energy_dissipation_m;
+        const double energyDissipationBalanceRelError =
+            std::abs(energyDissipationBalanceError)
+            / std::max(std::abs(spectral_3d_cumulative_energy_dissipation_m), 1e-30);
         const double velocityL2 = std::sqrt(std::max(2.0 * energy, 1e-30));
         const double divergenceNormalized = divergenceL2 / velocityL2;
         const double vorticityL2 = std::sqrt(std::max(2.0 * enstrophy, 1e-30));
@@ -414,6 +440,11 @@
             if (firstWrite) {
                 out << "method,dt,step,time,spectral_energy,spectral_energy_rel_error,"
                     << "spectral_enstrophy,spectral_enstrophy_rel_error,"
+                    << "spectral_energy_dissipation_rate,"
+                    << "spectral_cumulative_energy_dissipation,"
+                    << "spectral_energy_loss,"
+                    << "spectral_energy_dissipation_balance_error,"
+                    << "spectral_energy_dissipation_balance_rel_error,"
                     << "spectral_divergence_l2,spectral_divergence_normalized,"
                     << "spectral_vorticity_divergence_l2,"
                     << "spectral_vorticity_divergence_normalized,"
@@ -425,6 +456,11 @@
             out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
                 << energy << "," << energyRelError << ","
                 << enstrophy << "," << enstrophyRelError << ","
+                << energyDissipationRate << ","
+                << spectral_3d_cumulative_energy_dissipation_m << ","
+                << energyLoss << ","
+                << energyDissipationBalanceError << ","
+                << energyDissipationBalanceRelError << ","
                 << divergenceL2 << "," << divergenceNormalized << ","
                 << vorticityDivergenceL2 << "," << vorticityDivergenceNormalized << ","
                 << spectralVelocityProjectionScale << ","
@@ -436,6 +472,11 @@
               << ", energyRelError = " << energyRelError
               << ", enstrophy = " << enstrophy
               << ", enstrophyRelError = " << enstrophyRelError
+              << ", energyDissipationRate = " << energyDissipationRate
+              << ", cumulativeEnergyDissipation = "
+              << spectral_3d_cumulative_energy_dissipation_m
+              << ", energyDissipationBalanceError = "
+              << energyDissipationBalanceError
               << ", divergenceL2 = " << divergenceL2
               << ", divergenceNormalized = " << divergenceNormalized
               << ", vorticityDivergenceL2 = " << vorticityDivergenceL2

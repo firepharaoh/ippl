@@ -87,6 +87,11 @@ protected:
     ComplexField_t viscosity_z_hat_m;
     RealField_t Sk_m;
     bool spectral_3d_diagnostics_initialized_m = false;
+    bool spectral_3d_dissipation_initialized_m = false;
+    double spectral_3d_initial_energy_m = 0.0;
+    double spectral_3d_previous_time_m = 0.0;
+    double spectral_3d_previous_dissipation_rate_m = 0.0;
+    double spectral_3d_cumulative_energy_dissipation_m = 0.0;
     bool tgv_3d_diagnostics_initialized_m = false;
 
 public:
