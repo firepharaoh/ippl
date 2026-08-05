@@ -292,71 +292,243 @@ public:
         IpplTimings::stopTimer(grid2parTimer);
     }
 
-    void RK4Step() {
-        static IpplTimings::TimerRef RTimer = IpplTimings::getTimer("rk4PushPosition");
-        static IpplTimings::TimerRef updateTimer = IpplTimings::getTimer("update");
+    void computeRK4ParticleRHS(bool diagnostics) {
+        static IpplTimings::TimerRef PTimer = IpplTimings::getTimer("pushVelocity");
+        static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
+        static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
+        static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
+        static IpplTimings::TimerRef gradientGatherTimer =
+            IpplTimings::getTimer("spectralGradientGather");
 
-        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
-        const T dt = this->dt_m;
+        IpplTimings::startTimer(par2gridTimer);
+        this->spectralScatter3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_x_hat_m);
+            this->Hou_Li_filter(this->omega_y_hat_m);
+            this->Hou_Li_filter(this->omega_z_hat_m);
+        }
+        IpplTimings::stopTimer(par2gridTimer);
 
-        pc->rk4_R0 = pc->R;
-
-        computeSpectralParticleVelocity(true);
-        pc->rk4_k1 = pc->P;
-
-        IpplTimings::startTimer(RTimer);
-        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k1;
-        IpplTimings::stopTimer(RTimer);
-        IpplTimings::startTimer(updateTimer);
-        pc->update();
-        IpplTimings::stopTimer(updateTimer);
-
-        computeSpectralParticleVelocity(false);
-        pc->rk4_k2 = pc->P;
-
-        IpplTimings::startTimer(RTimer);
-        pc->R = pc->rk4_R0 + (0.5 * dt) * pc->rk4_k2;
-        IpplTimings::stopTimer(RTimer);
-        IpplTimings::startTimer(updateTimer);
-        pc->update();
-        IpplTimings::stopTimer(updateTimer);
-
-        computeSpectralParticleVelocity(false);
-        pc->rk4_k3 = pc->P;
-
-        IpplTimings::startTimer(RTimer);
-        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
-        IpplTimings::stopTimer(RTimer);
-        IpplTimings::startTimer(updateTimer);
-        pc->update();
-        IpplTimings::stopTimer(updateTimer);
-
-        computeSpectralParticleVelocity(false);
-        pc->rk4_k4 = pc->P;
-
-        IpplTimings::startTimer(RTimer);
-        pc->R_old = pc->rk4_R0;
-        pc->R = pc->rk4_R0 + (dt / 6.0) *
-                              (pc->rk4_k1 + 2.0 * pc->rk4_k2 + 2.0 * pc->rk4_k3 + pc->rk4_k4);
-        IpplTimings::stopTimer(RTimer);
-
-        IpplTimings::startTimer(updateTimer);
-        pc->update();
-        IpplTimings::stopTimer(updateTimer);
+        IpplTimings::startTimer(SolveTimer);
+        this->computeSpectralVelocityModes3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+            this->Hou_Li_filter(this->uz_hat_m);
+        }
+        this->computeSpectralVelocityGradientModes3D();
 
         if (this->viscosity_m > 0.0) {
-            this->spectralScatter3D();
-            if (this->useHouLiFilter()) {
-                this->Hou_Li_filter(this->omega_x_hat_m);
-                this->Hou_Li_filter(this->omega_y_hat_m);
-                this->Hou_Li_filter(this->omega_z_hat_m);
-            }
             this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->computeSpectralViscosityModes3D();
+        }
+        IpplTimings::stopTimer(SolveTimer);
+
+        IpplTimings::startTimer(PTimer);
+        if (diagnostics) {
+            this->logSpectralDiagnostics3D();
+            this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+            this->logTaylorGreenDiagnostics3D();
+        }
+        IpplTimings::stopTimer(PTimer);
+
+        IpplTimings::startTimer(gradientGatherTimer);
+        this->spectralGatherGradientModes3D();
+        if (this->viscosity_m > 0.0) {
             this->spectralGatherViscosity3D();
-            this->applyParticleViscosity3D();
+        }
+        IpplTimings::stopTimer(gradientGatherTimer);
+
+        IpplTimings::startTimer(grid2parTimer);
+        this->spectralGather3D();
+        IpplTimings::stopTimer(grid2parTimer);
+    }
+
+    void storeRK4OmegaRHS(typename ParticleContainer_t::particle_position_type& target) {
+        static IpplTimings::TimerRef stretchingTimer =
+            IpplTimings::getTimer("vortexStretching");
+
+        auto& pc = *this->pcontainer_m;
+        auto omega = pc.omega.getView();
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
+        auto viscosity = pc.viscosity.getView();
+        auto rhs = target.getView();
+        const auto n = pc.getLocalNum();
+
+        const unsigned nxp = static_cast<unsigned>(
+            std::round(std::cbrt(static_cast<double>(this->np_m))));
+        const T dxp = T(this->rmax_m[0] - this->rmin_m[0]) / nxp;
+        const T dyp = T(this->rmax_m[1] - this->rmin_m[1]) / nxp;
+        const T dzp = T(this->rmax_m[2] - this->rmin_m[2]) / nxp;
+        const T particleVolume = dxp * dyp * dzp;
+        const bool useViscosity = this->viscosity_m > 0.0;
+
+        IpplTimings::startTimer(stretchingTimer);
+        Kokkos::parallel_for(
+            "store_rk4_vorticity_rhs_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                const T omegaX = omega(p)[0];
+                const T omegaY = omega(p)[1];
+                const T omegaZ = omega(p)[2];
+
+                rhs(p)[0] = omegaX * duxdx(p) + omegaY * duxdy(p) + omegaZ * duxdz(p);
+                rhs(p)[1] = omegaX * duydx(p) + omegaY * duydy(p) + omegaZ * duydz(p);
+                rhs(p)[2] = omegaX * duzdx(p) + omegaY * duzdy(p) + omegaZ * duzdz(p);
+
+                if (useViscosity) {
+                    rhs(p)[0] += viscosity(p)[0] * particleVolume;
+                    rhs(p)[1] += viscosity(p)[1] * particleVolume;
+                    rhs(p)[2] += viscosity(p)[2] * particleVolume;
+                }
+            });
+        Kokkos::fence();
+        IpplTimings::stopTimer(stretchingTimer);
+    }
+
+    void setRK4StageState(typename ParticleContainer_t::particle_position_type& baseR,
+                          typename ParticleContainer_t::particle_position_type& baseOmega,
+                          typename ParticleContainer_t::particle_position_type& kR,
+                          typename ParticleContainer_t::particle_position_type& kOmega,
+                          const T scale) {
+        static IpplTimings::TimerRef RTimer = IpplTimings::getTimer("rk4PushPosition");
+
+        auto& pc = *this->pcontainer_m;
+        auto R = pc.R.getView();
+        auto omega = pc.omega.getView();
+        auto omegaX = pc.omega_x.getView();
+        auto omegaY = pc.omega_y.getView();
+        auto omegaZ = pc.omega_z.getView();
+        auto baseRView = baseR.getView();
+        auto baseOmegaView = baseOmega.getView();
+        auto kRView = kR.getView();
+        auto kOmegaView = kOmega.getView();
+        const auto n = pc.getLocalNum();
+        const T dtScale = scale * T(this->dt_m);
+
+        IpplTimings::startTimer(RTimer);
+        Kokkos::parallel_for(
+            "set_rk4_stage_state_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                for (unsigned d = 0; d < Dim; ++d) {
+                    R(p)[d] = baseRView(p)[d] + dtScale * kRView(p)[d];
+                    omega(p)[d] = baseOmegaView(p)[d] + dtScale * kOmegaView(p)[d];
+                }
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
+            });
+        Kokkos::fence();
+        IpplTimings::stopTimer(RTimer);
+    }
+
+    void finalizeRK4State() {
+        static IpplTimings::TimerRef RTimer = IpplTimings::getTimer("rk4PushPosition");
+
+        auto& pc = *this->pcontainer_m;
+        auto R = pc.R.getView();
+        auto Rold = pc.R_old.getView();
+        auto omega = pc.omega.getView();
+        auto omegaX = pc.omega_x.getView();
+        auto omegaY = pc.omega_y.getView();
+        auto omegaZ = pc.omega_z.getView();
+        auto R0 = pc.rk4_R0.getView();
+        auto omega0 = pc.rk4_omega0.getView();
+        auto kR1 = pc.rk4_k1.getView();
+        auto kR2 = pc.rk4_k2.getView();
+        auto kR3 = pc.rk4_k3.getView();
+        auto kR4 = pc.rk4_k4.getView();
+        auto kOmega1 = pc.rk4_omega_k1.getView();
+        auto kOmega2 = pc.rk4_omega_k2.getView();
+        auto kOmega3 = pc.rk4_omega_k3.getView();
+        auto kOmega4 = pc.rk4_omega_k4.getView();
+        const auto n = pc.getLocalNum();
+        const T sixthDt = T(this->dt_m) / T(6.0);
+
+        IpplTimings::startTimer(RTimer);
+        Kokkos::parallel_for(
+            "finalize_rk4_state_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                Rold(p) = R0(p);
+                for (unsigned d = 0; d < Dim; ++d) {
+                    R(p)[d] = R0(p)[d] + sixthDt *
+                        (kR1(p)[d] + T(2.0) * kR2(p)[d] +
+                         T(2.0) * kR3(p)[d] + kR4(p)[d]);
+                    omega(p)[d] = omega0(p)[d] + sixthDt *
+                        (kOmega1(p)[d] + T(2.0) * kOmega2(p)[d] +
+                         T(2.0) * kOmega3(p)[d] + kOmega4(p)[d]);
+                }
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
+            });
+        Kokkos::fence();
+        IpplTimings::stopTimer(RTimer);
+    }
+
+    void RK4Step() {
+        static IpplTimings::TimerRef updateTimer = IpplTimings::getTimer("update");
+
+        std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
+
+        pc->rk4_R0 = pc->R;
+        pc->rk4_omega0 = pc->omega;
+
+        computeRK4ParticleRHS(true);
+        pc->rk4_k1 = pc->P;
+        storeRK4OmegaRHS(pc->rk4_omega_k1);
+
+        setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k1, pc->rk4_omega_k1,
+                         T(0.5));
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeRK4ParticleRHS(false);
+        pc->rk4_k2 = pc->P;
+        storeRK4OmegaRHS(pc->rk4_omega_k2);
+
+        setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k2, pc->rk4_omega_k2,
+                         T(0.5));
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeRK4ParticleRHS(false);
+        pc->rk4_k3 = pc->P;
+        storeRK4OmegaRHS(pc->rk4_omega_k3);
+
+        setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k3, pc->rk4_omega_k3,
+                         T(1.0));
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        computeRK4ParticleRHS(false);
+        pc->rk4_k4 = pc->P;
+        storeRK4OmegaRHS(pc->rk4_omega_k4);
+
+        finalizeRK4State();
+
+        IpplTimings::startTimer(updateTimer);
+        pc->update();
+        IpplTimings::stopTimer(updateTimer);
+
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            remeshParticles3D();
         }
     }
 
@@ -459,10 +631,20 @@ public:
             this->Hou_Li_filter(this->omega_y_hat_m);
             this->Hou_Li_filter(this->omega_z_hat_m);
         }
+        this->computeSpectralVelocityModes3D();
+        if (this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->ux_hat_m);
+            this->Hou_Li_filter(this->uy_hat_m);
+            this->Hou_Li_filter(this->uz_hat_m);
+        }
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
 
         alvine::vtk::writeVectorField3D("data/VortexInFourier3D", "omega",
                                         this->fcontainer_m->getOmegaField(), this->rmin_m,
+                                        this->hr_m, this->it_m);
+        alvine::vtk::writeVectorField3D("data/VortexInFourier3D", "velocity",
+                                        this->fcontainer_m->getUField(), this->rmin_m,
                                         this->hr_m, this->it_m);
 
         IpplTimings::stopTimer(dumpTimer);

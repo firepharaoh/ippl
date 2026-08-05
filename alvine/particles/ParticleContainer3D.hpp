@@ -37,6 +37,11 @@ public:
         particle_position_type rk4_k2;
         particle_position_type rk4_k3;
         particle_position_type rk4_k4;
+        particle_position_type rk4_omega0;
+        particle_position_type rk4_omega_k1;
+        particle_position_type rk4_omega_k2;
+        particle_position_type rk4_omega_k3;
+        particle_position_type rk4_omega_k4;
 
         particle_position_type viscosity;//Viscosity attribute for particles  
         ippl::ParticleAttrib<T> viscosity_x;
@@ -89,6 +94,11 @@ public:
         this->addAttribute(rk4_k2);
         this->addAttribute(rk4_k3);
         this->addAttribute(rk4_k4);
+        this->addAttribute(rk4_omega0);
+        this->addAttribute(rk4_omega_k1);
+        this->addAttribute(rk4_omega_k2);
+        this->addAttribute(rk4_omega_k3);
+        this->addAttribute(rk4_omega_k4);
         this->addAttribute(viscosity); // Register the viscosity attribute
         this->addAttribute(stretching_term);
 
