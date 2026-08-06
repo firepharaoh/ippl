@@ -1,7 +1,7 @@
 #ifndef IPPL_ALVINE_SPECTRAL_ALVINESPECTRALOPS3D_HPP
 #define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALOPS3D_HPP
 
-    void spectralScatter3D() {
+    void spectralScatter3D(const bool applyShapeFilter = true) {
         if (!nufftType1_mp) {
             throw std::runtime_error("AlvineManager3D::spectralScatter3D called before initNUFFT3D");
         }
@@ -31,31 +31,66 @@
         nufftType1_mp->transform(pc.R, pc.omega_y, omega_y_hat_m);
         nufftType1_mp->transform(pc.R, pc.omega_z, omega_z_hat_m);
 
-        if (useShapeFunctionFilter()) {
-            auto oxModes = omega_x_hat_m.getView();
-            auto oyModes = omega_y_hat_m.getView();
-            auto ozModes = omega_z_hat_m.getView();
-            auto shapeView = Sk_m.getView();
-            const int nghost = omega_x_hat_m.getNghost();
-
-            using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-            Kokkos::parallel_for(
-                "shape_spectral_vorticity_modes_3d",
-                policy_type({nghost, nghost, nghost},
-                            {static_cast<int>(oxModes.extent(0)) - nghost,
-                             static_cast<int>(oxModes.extent(1)) - nghost,
-                             static_cast<int>(oxModes.extent(2)) - nghost}),
-                KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                    oxModes(i, j, k) *= shapeView(i, j, k);
-                    oyModes(i, j, k) *= shapeView(i, j, k);
-                    ozModes(i, j, k) *= shapeView(i, j, k);
-                });
+        if (applyShapeFilter && useShapeFunctionFilter()) {
+            applyShapeFunctionToSpectralVorticityModes3D();
         }
         Kokkos::fence();
     }
 
     void spectralScatter() {
         spectralScatter3D();
+    }
+
+    double computeSpectralVorticityModeNorm2Raw3D() {
+        auto ox = omega_x_hat_m.getView();
+        auto oy = omega_y_hat_m.getView();
+        auto oz = omega_z_hat_m.getView();
+        const int nghost = omega_x_hat_m.getNghost();
+
+        double localNorm2 = 0.0;
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_reduce(
+            "compute_raw_vorticity_mode_norm2_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k, double& lsum) {
+                const auto oxMode = ox(i, j, k);
+                const auto oyMode = oy(i, j, k);
+                const auto ozMode = oz(i, j, k);
+
+                lsum += oxMode.real() * oxMode.real() + oxMode.imag() * oxMode.imag()
+                      + oyMode.real() * oyMode.real() + oyMode.imag() * oyMode.imag()
+                      + ozMode.real() * ozMode.real() + ozMode.imag() * ozMode.imag();
+            },
+            localNorm2);
+
+        double globalNorm2 = 0.0;
+        ippl::Comm->allreduce(localNorm2, globalNorm2, 1, std::plus<double>());
+        return globalNorm2;
+    }
+
+    void applyShapeFunctionToSpectralVorticityModes3D() {
+        auto oxModes = omega_x_hat_m.getView();
+        auto oyModes = omega_y_hat_m.getView();
+        auto ozModes = omega_z_hat_m.getView();
+        auto shapeView = Sk_m.getView();
+        const int nghost = omega_x_hat_m.getNghost();
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "shape_spectral_vorticity_modes_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(oxModes.extent(0)) - nghost,
+                         static_cast<int>(oxModes.extent(1)) - nghost,
+                         static_cast<int>(oxModes.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                oxModes(i, j, k) *= shapeView(i, j, k);
+                oyModes(i, j, k) *= shapeView(i, j, k);
+                ozModes(i, j, k) *= shapeView(i, j, k);
+            });
+        Kokkos::fence();
     }
 
     void Hou_Li_filter(ComplexField_t& modes, double alpha = 36.0, int exponent = 36) {
