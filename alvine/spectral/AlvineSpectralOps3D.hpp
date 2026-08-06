@@ -103,7 +103,88 @@
         Kokkos::fence();
     }
 
+    void projectSpectralVorticityModes3D() {
+        auto ox = omega_x_hat_m.getView();
+        auto oy = omega_y_hat_m.getView();
+        auto oz = omega_z_hat_m.getView();
+
+        auto& layout = omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = omega_x_hat_m.getNghost();
+
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
+
+        const T Lx = rmax_m[0] - rmin_m[0];
+        const T Ly = rmax_m[1] - rmin_m[1];
+        const T Lz = rmax_m[2] - rmin_m[2];
+
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "project_spectral_vorticity_modes_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                // Convert the local array index to the corresponding global
+                // Fourier-grid index for this MPI rank's local slab.
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                // Map FFT ordering to signed integer wave numbers.
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                // Use the same effective wave-vector convention as the
+                // velocity reconstruction and diagnostics: the Nyquist mode is
+                // treated as zero in its own direction.
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+
+                // k2 is the denominator in the Helmholtz projection onto the
+                // plane perpendicular to k. The zero mode has no direction, so
+                // keep the previous solver convention and remove mean vorticity.
+                const T k2 = kx * kx + ky * ky + kz * kz;
+                if (k2 == T(0)) {
+                    ox(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    oy(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    oz(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    return;
+                }
+
+                // Project omega_hat by removing the component parallel to k:
+                // omega_hat <- omega_hat - k * (k dot omega_hat) / |k|^2.
+                const auto kDotOmega =
+                    kx * ox(i, j, k) + ky * oy(i, j, k) + kz * oz(i, j, k);
+                const auto correction = kDotOmega / k2;
+
+                // Each component update is independent for this mode, so the
+                // kernel writes only the current local spectral cell.
+                ox(i, j, k) -= kx * correction;
+                oy(i, j, k) -= ky * correction;
+                oz(i, j, k) -= kz * correction;
+            });
+        Kokkos::fence();
+    }
+
     void computeSpectralVelocityModes3D() {
+        // Ensure the vorticity modes are solenoidal before using the
+        // Biot-Savart relation. Filtering, remeshing, and particle scatter can
+        // introduce a small k-parallel component that would otherwise appear as
+        // nonzero div(omega) in diagnostics and downstream reconstructions.
+        projectSpectralVorticityModes3D();
+
         auto ox = omega_x_hat_m.getView();
         auto oy = omega_y_hat_m.getView();
         auto oz = omega_z_hat_m.getView();
