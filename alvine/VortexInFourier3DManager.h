@@ -284,16 +284,9 @@ public:
         const double postRemeshOmegaNormUnfiltered =
             this->computeSpectralVorticityModeNorm2Raw3D();
         double postRemeshOmegaNormAfterShape = postRemeshOmegaNormUnfiltered;
-        if (this->useShapeFunctionFilter()) {
-            this->applyShapeFunctionToSpectralVorticityModes3D();
-            postRemeshOmegaNormAfterShape = this->computeSpectralVorticityModeNorm2Raw3D();
-        }
-
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
-        }
+        // The reconstructed grid field was already produced from filtered modes.
+        // Applying a spectral filter again immediately after assigning remeshed
+        // particles compounds attenuation at every remesh event.
         const double postRemeshOmegaNormBeforeProjection =
             this->computeSpectralVorticityModeNorm2Raw3D();
         this->computeSpectralVelocityModes3D();
