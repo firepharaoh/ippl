@@ -27,6 +27,8 @@ public:
 private:
     int remesh_freq_m = 0;
     bool bootstrap_next_push_m = false;
+    bool skip_next_rhs_filter_after_remesh_m = false;
+    int last_remesh_step_m = -1;
 
 public:
     VortexInFourier3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -87,6 +89,8 @@ public:
         reconstructFieldsForRemeshing3D();
         remeshParticlesFromGrid3D();
         bootstrap_next_push_m = true;
+        skip_next_rhs_filter_after_remesh_m = true;
+        last_remesh_step_m = static_cast<int>(this->it_m + 1);
     }
 
     void reconstructFieldsForRemeshing3D() {
@@ -463,12 +467,7 @@ public:
         static IpplTimings::TimerRef grid2parTimer = IpplTimings::getTimer("spectralGather");
 
         IpplTimings::startTimer(par2gridTimer);
-        this->spectralScatter3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
-        }
+        refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
 
         IpplTimings::startTimer(SolveTimer);
@@ -503,12 +502,7 @@ public:
             IpplTimings::getTimer("spectralGradientGather");
 
         IpplTimings::startTimer(par2gridTimer);
-        this->spectralScatter3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
-        }
+        refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
 
         IpplTimings::startTimer(SolveTimer);
@@ -749,12 +743,7 @@ public:
         std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
         IpplTimings::startTimer(par2gridTimer);
-        this->spectralScatter3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
-        }
+        refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
 
         IpplTimings::startTimer(SolveTimer);
@@ -827,12 +816,7 @@ public:
         static IpplTimings::TimerRef dumpTimer = IpplTimings::getTimer("vtkDump");
         IpplTimings::startTimer(dumpTimer);
 
-        this->spectralScatter3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
-        }
+        refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
         if (this->useHouLiFilter()) {
             this->Hou_Li_filter(this->ux_hat_m);
@@ -930,6 +914,23 @@ public:
     }
 
 private:
+    void refreshSpectralVorticityModes3D(const bool consumeRemeshSkip) {
+        const bool skipFilter =
+            consumeRemeshSkip ? skip_next_rhs_filter_after_remesh_m
+                              : (last_remesh_step_m == static_cast<int>(this->it_m));
+
+        this->spectralScatter3D(!skipFilter);
+        if (!skipFilter && this->useHouLiFilter()) {
+            this->Hou_Li_filter(this->omega_x_hat_m);
+            this->Hou_Li_filter(this->omega_y_hat_m);
+            this->Hou_Li_filter(this->omega_z_hat_m);
+        }
+
+        if (consumeRemeshSkip) {
+            skip_next_rhs_filter_after_remesh_m = false;
+        }
+    }
+
     static double relativeLoss(const double before, const double after) {
         return (before - after) / std::max(std::abs(before), 1e-300);
     }
