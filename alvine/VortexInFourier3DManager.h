@@ -25,6 +25,7 @@ public:
 
 private:
     int remesh_freq_m = 0;
+    int diagnostics_freq_m = 1;
     bool bootstrap_next_push_m = false;
     bool skip_next_rhs_filter_after_remesh_m = false;
     int last_remesh_step_m = -1;
@@ -40,10 +41,12 @@ public:
                              Vector_t<double, Dim> rmin_ = 0.0,
                              Vector_t<double, Dim> rmax_ = 1.0,
                              Vector_t<double, Dim> origin_ = 0.0,
-                             int remesh_freq_ = 0)
+                             int remesh_freq_ = 0,
+                             int diagnostics_freq_ = 1)
         : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
                                 spectral_filter_, viscosity_, time_integrator_)
-        , remesh_freq_m(remesh_freq_) {
+        , remesh_freq_m(remesh_freq_)
+        , diagnostics_freq_m(diagnostics_freq_) {
         this->rmin_m = rmin_;
         this->rmax_m = rmax_;
         this->origin_m = origin_;
@@ -484,7 +487,7 @@ public:
         pc->rk4_R0 = pc->R;
         pc->rk4_omega0 = pc->omega;
 
-        computeRK4ParticleRHS(true);
+        computeRK4ParticleRHS(shouldLogDiagnostics3D());
         pc->rk4_k1 = pc->P;
         storeRK4OmegaRHS(pc->rk4_omega_k1);
 
@@ -556,10 +559,12 @@ public:
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
-        this->logSpectralDiagnostics3D();
-        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
-        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
-        this->logTaylorGreenDiagnostics3D();
+        if (shouldLogDiagnostics3D()) {
+            this->logSpectralDiagnostics3D();
+            this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+            this->logTaylorGreenDiagnostics3D();
+        }
         IpplTimings::stopTimer(PTimer);
 
         IpplTimings::startTimer(gradientGatherTimer);
@@ -711,6 +716,11 @@ public:
     }
 
 private:
+    bool shouldLogDiagnostics3D() const {
+        return diagnostics_freq_m > 0
+               && static_cast<int>(this->it_m) % diagnostics_freq_m == 0;
+    }
+
     void refreshSpectralVorticityModes3D(const bool consumeRemeshSkip) {
         const bool skipFilter =
             consumeRemeshSkip ? skip_next_rhs_filter_after_remesh_m

@@ -27,7 +27,8 @@ int main(int argc, char* argv[]) {
             msg << "Usage: VortexInFourier3D nx ny nz np nt solver dump_freq [remesh_freq] "
                    "[--dt dt] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
-                   "[--remesh-freq frequency] [--overallocate value] [--info level]"
+                   "[--remesh-freq frequency] [--diagnostics-freq frequency] "
+                   "[--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
         }
@@ -50,6 +51,7 @@ int main(int argc, char* argv[]) {
         double viscosity = 0.0;
         std::string time_integrator = "leapfrog";
         int remesh_freq = 0;
+        int diagnostics_freq = 1;
         if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
             remesh_freq = std::atoi(argv[arg++]);
         }
@@ -72,6 +74,8 @@ int main(int argc, char* argv[]) {
                 }
             } else if (option == "--remesh-freq" && arg < static_cast<unsigned>(argc)) {
                 remesh_freq = std::atoi(argv[arg++]);
+            } else if (option == "--diagnostics-freq" && arg < static_cast<unsigned>(argc)) {
+                diagnostics_freq = std::atoi(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
                 time_integrator = argv[arg++];
                 std::transform(time_integrator.begin(), time_integrator.end(),
@@ -94,6 +98,9 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--remesh-freq") {
                 msg << "Missing value after --remesh-freq" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--diagnostics-freq") {
+                msg << "Missing value after --diagnostics-freq" << endl;
                 ippl::Comm->abort();
             } else if (option == "--integrator") {
                 msg << "Missing value after --integrator" << endl;
@@ -140,6 +147,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (diagnostics_freq < 0) {
+            msg << "Invalid --diagnostics-freq value " << diagnostics_freq
+                << ". Use 0 to disable diagnostics or a positive frequency." << endl;
+            ippl::Comm->abort();
+        }
+
         Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
@@ -153,11 +166,13 @@ int main(int argc, char* argv[]) {
             << " Spectral filter: " << spectral_filter
             << " viscosity: " << viscosity
             << " Remesh frequency: " << remesh_freq
+            << " Diagnostics frequency: " << diagnostics_freq
             << " Time integrator: " << time_integrator << endl;
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
                                             spectral_filter, viscosity, time_integrator,
-                                            rmin, rmax, origin, remesh_freq);
+                                            rmin, rmax, origin, remesh_freq,
+                                            diagnostics_freq);
         manager.pre_run();
         manager.run(manager.getNt());
 
