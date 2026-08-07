@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -95,42 +94,22 @@ public:
 
     void reconstructFieldsForRemeshing3D() {
         this->spectralScatter3D(false);
-        const double omegaNormUnfiltered = this->computeSpectralVorticityModeNorm2Raw3D();
 
-        double omegaNormAfterShape = omegaNormUnfiltered;
         if (this->useShapeFunctionFilter()) {
             this->applyShapeFunctionToSpectralVorticityModes3D();
-            omegaNormAfterShape = this->computeSpectralVorticityModeNorm2Raw3D();
         }
 
-        double omegaNormAfterHouLi = omegaNormAfterShape;
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
-            omegaNormAfterHouLi = this->computeSpectralVorticityModeNorm2Raw3D();
-        }
+        this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
 
-        const double omegaNormBeforeProjection = omegaNormAfterHouLi;
         this->computeSpectralVelocityModes3D();
-        const double omegaNormAfterProjection = this->computeSpectralVorticityModeNorm2Raw3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->ux_hat_m);
-            this->Hou_Li_filter(this->uy_hat_m);
-            this->Hou_Li_filter(this->uz_hat_m);
-        }
-
-        const double energyAfterProjection = this->computeSpectralEnergy3D();
-        const double enstrophyAfterProjection = this->computeSpectralEnstrophy3D();
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
 
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
-
-        const double gridEnstrophy = computeRemeshGridVorticityEnstrophy3D();
-        logRemeshSpectralProbe3D(omegaNormUnfiltered, omegaNormAfterShape,
-                                 omegaNormAfterHouLi, omegaNormBeforeProjection,
-                                 omegaNormAfterProjection, energyAfterProjection,
-                                 enstrophyAfterProjection, gridEnstrophy);
     }
 
     void remeshParticlesFromGrid3D() {
@@ -279,185 +258,11 @@ public:
 
         Kokkos::fence();
 
-        logRemeshParticleGridAlignment3D(
-            nlocal, nxp_local, nyp_local, ix_start, iy_start, iz_start, dxp, dyp, dzp,
-            xmin_global, ymin_global, zmin_global, local_start_x, local_start_y,
-            local_start_z, local_end_x, local_end_y, local_end_z);
-
         this->spectralScatter3D(false);
-        const double postRemeshOmegaNormUnfiltered =
-            this->computeSpectralVorticityModeNorm2Raw3D();
-        double postRemeshOmegaNormAfterShape = postRemeshOmegaNormUnfiltered;
         // The reconstructed grid field was already produced from filtered modes.
         // Applying a spectral filter again immediately after assigning remeshed
         // particles compounds attenuation at every remesh event.
-        const double postRemeshOmegaNormBeforeProjection =
-            this->computeSpectralVorticityModeNorm2Raw3D();
         this->computeSpectralVelocityModes3D();
-        const double postRemeshOmegaNormAfterProjection =
-            this->computeSpectralVorticityModeNorm2Raw3D();
-        const double postRemeshEnergy = this->computeSpectralEnergy3D();
-        const double postRemeshEnstrophy = this->computeSpectralEnstrophy3D();
-
-        logPostRemeshSpectralProbe3D(postRemeshOmegaNormUnfiltered,
-                                     postRemeshOmegaNormAfterShape,
-                                     postRemeshOmegaNormBeforeProjection,
-                                     postRemeshOmegaNormAfterProjection,
-                                     postRemeshEnergy, postRemeshEnstrophy);
-    }
-
-    double computeRemeshGridVorticityEnstrophy3D() {
-        auto omegaGrid = this->fcontainer_m->getOmegaField().getView();
-        const int nghost = this->fcontainer_m->getOmegaField().getNghost();
-        const double cellVolume = this->hr_m[0] * this->hr_m[1] * this->hr_m[2];
-
-        double localSum = 0.0;
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_reduce(
-            "compute_remesh_grid_vorticity_enstrophy_3d",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(omegaGrid.extent(0)) - nghost,
-                         static_cast<int>(omegaGrid.extent(1)) - nghost,
-                         static_cast<int>(omegaGrid.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k, double& lsum) {
-                const auto omega = omegaGrid(i, j, k);
-                lsum += omega[0] * omega[0] + omega[1] * omega[1] + omega[2] * omega[2];
-            },
-            localSum);
-
-        double globalSum = 0.0;
-        ippl::Comm->allreduce(localSum, globalSum, 1, std::plus<double>());
-        return 0.5 * cellVolume * globalSum;
-    }
-
-    void logRemeshSpectralProbe3D(const double omegaNormUnfiltered,
-                                  const double omegaNormAfterShape,
-                                  const double omegaNormAfterHouLi,
-                                  const double omegaNormBeforeProjection,
-                                  const double omegaNormAfterProjection,
-                                  const double energyAfterProjection,
-                                  const double enstrophyAfterProjection,
-                                  const double gridEnstrophy) const {
-        if (ippl::Comm->rank() != 0) {
-            return;
-        }
-
-        Inform m("vif3d_remesh_probe ");
-        m << "step = " << (this->it_m + 1)
-          << ", phase = reconstruct"
-          << ", omegaNorm2Unfiltered = " << omegaNormUnfiltered
-          << ", omegaNorm2AfterShape = " << omegaNormAfterShape
-          << ", shapeRelLoss = " << relativeLoss(omegaNormUnfiltered, omegaNormAfterShape)
-          << ", omegaNorm2AfterHouLi = " << omegaNormAfterHouLi
-          << ", houLiRelLoss = " << relativeLoss(omegaNormAfterShape, omegaNormAfterHouLi)
-          << ", omegaNorm2BeforeProjection = " << omegaNormBeforeProjection
-          << ", omegaNorm2AfterProjection = " << omegaNormAfterProjection
-          << ", projectionRelLoss = "
-          << relativeLoss(omegaNormBeforeProjection, omegaNormAfterProjection)
-          << ", spectralEnergyAfterProjection = " << energyAfterProjection
-          << ", spectralEnstrophyAfterProjection = " << enstrophyAfterProjection
-          << ", reconstructedGridEnstrophy = " << gridEnstrophy << endl;
-    }
-
-    void logPostRemeshSpectralProbe3D(const double omegaNormUnfiltered,
-                                      const double omegaNormAfterShape,
-                                      const double omegaNormBeforeProjection,
-                                      const double omegaNormAfterProjection,
-                                      const double energyAfterProjection,
-                                      const double enstrophyAfterProjection) const {
-        if (ippl::Comm->rank() != 0) {
-            return;
-        }
-
-        Inform m("vif3d_remesh_probe ");
-        m << "step = " << (this->it_m + 1)
-          << ", phase = post_particle_assignment"
-          << ", omegaNorm2Unfiltered = " << omegaNormUnfiltered
-          << ", omegaNorm2AfterShape = " << omegaNormAfterShape
-          << ", shapeRelLoss = " << relativeLoss(omegaNormUnfiltered, omegaNormAfterShape)
-          << ", omegaNorm2BeforeProjection = " << omegaNormBeforeProjection
-          << ", omegaNorm2AfterProjection = " << omegaNormAfterProjection
-          << ", projectionRelLoss = "
-          << relativeLoss(omegaNormBeforeProjection, omegaNormAfterProjection)
-          << ", spectralEnergyAfterProjection = " << energyAfterProjection
-          << ", spectralEnstrophyAfterProjection = " << enstrophyAfterProjection << endl;
-    }
-
-    void logRemeshParticleGridAlignment3D(
-        const size_type nlocal, const unsigned nxp_local, const unsigned nyp_local,
-        const int ix_start, const int iy_start, const int iz_start,
-        const double dxp, const double dyp, const double dzp,
-        const double xmin_global, const double ymin_global, const double zmin_global,
-        const int local_start_x, const int local_start_y, const int local_start_z,
-        const int local_end_x, const int local_end_y, const int local_end_z) const {
-        const Vector_t<double, Dim> rmin = this->rmin_m;
-        const Vector_t<double, Dim> hr = this->hr_m;
-
-        double localMaxCenterError = 0.0;
-        double localMismatchCount = 0.0;
-        Kokkos::parallel_reduce(
-            "measure_remesh_particle_grid_alignment_3d",
-            nlocal,
-            KOKKOS_LAMBDA(const size_t p, double& maxError, double& mismatchCount) {
-                const unsigned ix_local = p % nxp_local;
-                const unsigned iy_local = (p / nxp_local) % nyp_local;
-                const unsigned iz_local = p / (nxp_local * nyp_local);
-
-                const unsigned ix_global = ix_start + ix_local;
-                const unsigned iy_global = iy_start + iy_local;
-                const unsigned iz_global = iz_start + iz_local;
-
-                const double x = xmin_global + (ix_global + 0.5) * dxp;
-                const double y = ymin_global + (iy_global + 0.5) * dyp;
-                const double z = zmin_global + (iz_global + 0.5) * dzp;
-
-                int grid_i = static_cast<int>(Kokkos::floor((x - rmin[0]) / hr[0]));
-                int grid_j = static_cast<int>(Kokkos::floor((y - rmin[1]) / hr[1]));
-                int grid_k = static_cast<int>(Kokkos::floor((z - rmin[2]) / hr[2]));
-
-                grid_i = grid_i < local_start_x ? local_start_x : grid_i;
-                grid_i = grid_i > local_end_x ? local_end_x : grid_i;
-                grid_j = grid_j < local_start_y ? local_start_y : grid_j;
-                grid_j = grid_j > local_end_y ? local_end_y : grid_j;
-                grid_k = grid_k < local_start_z ? local_start_z : grid_k;
-                grid_k = grid_k > local_end_z ? local_end_z : grid_k;
-
-                const double centerX = rmin[0] + (grid_i + 0.5) * hr[0];
-                const double centerY = rmin[1] + (grid_j + 0.5) * hr[1];
-                const double centerZ = rmin[2] + (grid_k + 0.5) * hr[2];
-                const double err = Kokkos::max(Kokkos::abs(x - centerX),
-                                   Kokkos::max(Kokkos::abs(y - centerY),
-                                               Kokkos::abs(z - centerZ)));
-
-                maxError = Kokkos::max(maxError, err);
-                if (grid_i != static_cast<int>(ix_global)
-                    || grid_j != static_cast<int>(iy_global)
-                    || grid_k != static_cast<int>(iz_global)) {
-                    mismatchCount += 1.0;
-                }
-            },
-            Kokkos::Max<double>(localMaxCenterError),
-            Kokkos::Sum<double>(localMismatchCount));
-
-        double globalMaxCenterError = 0.0;
-        double globalMismatchCount = 0.0;
-        ippl::Comm->allreduce(localMaxCenterError, globalMaxCenterError, 1,
-                              std::greater<double>());
-        ippl::Comm->allreduce(localMismatchCount, globalMismatchCount, 1,
-                              std::plus<double>());
-
-        const double spacingError =
-            std::max(std::abs(dxp - hr[0]),
-                     std::max(std::abs(dyp - hr[1]), std::abs(dzp - hr[2])));
-
-        if (ippl::Comm->rank() == 0) {
-            Inform m("vif3d_remesh_probe ");
-            m << "step = " << (this->it_m + 1)
-              << ", phase = particle_grid_alignment"
-              << ", maxSpacingError = " << spacingError
-              << ", maxCenterError = " << globalMaxCenterError
-              << ", mismatchedCellCount = " << globalMismatchCount << endl;
-        }
     }
 
     void computeSpectralParticleVelocity(bool diagnostics) {
@@ -472,11 +277,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->ux_hat_m);
-            this->Hou_Li_filter(this->uy_hat_m);
-            this->Hou_Li_filter(this->uz_hat_m);
-        }
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
@@ -507,11 +310,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->ux_hat_m);
-            this->Hou_Li_filter(this->uy_hat_m);
-            this->Hou_Li_filter(this->uz_hat_m);
-        }
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
 
         if (this->viscosity_m > 0.0) {
@@ -748,11 +549,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->ux_hat_m);
-            this->Hou_Li_filter(this->uy_hat_m);
-            this->Hou_Li_filter(this->uz_hat_m);
-        }
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
         IpplTimings::stopTimer(SolveTimer);
 
@@ -818,11 +617,9 @@ public:
 
         refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
-        if (this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->ux_hat_m);
-            this->Hou_Li_filter(this->uy_hat_m);
-            this->Hou_Li_filter(this->uz_hat_m);
-        }
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
 
@@ -920,19 +717,15 @@ private:
                               : (last_remesh_step_m == static_cast<int>(this->it_m));
 
         this->spectralScatter3D(!skipFilter);
-        if (!skipFilter && this->useHouLiFilter()) {
-            this->Hou_Li_filter(this->omega_x_hat_m);
-            this->Hou_Li_filter(this->omega_y_hat_m);
-            this->Hou_Li_filter(this->omega_z_hat_m);
+        if (!skipFilter) {
+            this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
+            this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
+            this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
         }
 
         if (consumeRemeshSkip) {
             skip_next_rhs_filter_after_remesh_m = false;
         }
-    }
-
-    static double relativeLoss(const double before, const double after) {
-        return (before - after) / std::max(std::abs(before), 1e-300);
     }
 
     unsigned particlesPerDirection3D() const {

@@ -41,36 +41,6 @@
         spectralScatter3D();
     }
 
-    double computeSpectralVorticityModeNorm2Raw3D() {
-        auto ox = omega_x_hat_m.getView();
-        auto oy = omega_y_hat_m.getView();
-        auto oz = omega_z_hat_m.getView();
-        const int nghost = omega_x_hat_m.getNghost();
-
-        double localNorm2 = 0.0;
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_reduce(
-            "compute_raw_vorticity_mode_norm2_3d",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(ox.extent(0)) - nghost,
-                         static_cast<int>(ox.extent(1)) - nghost,
-                         static_cast<int>(ox.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k, double& lsum) {
-                const auto oxMode = ox(i, j, k);
-                const auto oyMode = oy(i, j, k);
-                const auto ozMode = oz(i, j, k);
-
-                lsum += oxMode.real() * oxMode.real() + oxMode.imag() * oxMode.imag()
-                      + oyMode.real() * oyMode.real() + oyMode.imag() * oyMode.imag()
-                      + ozMode.real() * ozMode.real() + ozMode.imag() * ozMode.imag();
-            },
-            localNorm2);
-
-        double globalNorm2 = 0.0;
-        ippl::Comm->allreduce(localNorm2, globalNorm2, 1, std::plus<double>());
-        return globalNorm2;
-    }
-
     void applyShapeFunctionToSpectralVorticityModes3D() {
         auto oxModes = omega_x_hat_m.getView();
         auto oyModes = omega_y_hat_m.getView();
@@ -136,6 +106,54 @@
                 view(i, j, k) *= filterFactor;
             });
         Kokkos::fence();
+    }
+
+    void twoThirdsFilter3D(ComplexField_t& modes) {
+        auto view = modes.getView();
+
+        auto& layout = modes.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const int nghost = modes.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const int Nz = domain[2].length();
+
+        const T cutoffX = T(Nx) / T(3.0);
+        const T cutoffY = T(Ny) / T(3.0);
+        const T cutoffZ = T(Nz) / T(3.0);
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "two_thirds_filter_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(view.extent(0)) - nghost,
+                         static_cast<int>(view.extent(1)) - nghost,
+                         static_cast<int>(view.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                if (Kokkos::abs(T(mx)) > cutoffX || Kokkos::abs(T(my)) > cutoffY
+                    || Kokkos::abs(T(mz)) > cutoffZ) {
+                    view(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                }
+            });
+        Kokkos::fence();
+    }
+
+    void applyConfiguredSpectralFilter3D(ComplexField_t& modes) {
+        if (useHouLiFilter()) {
+            Hou_Li_filter(modes);
+        } else if (useTwoThirdsFilter()) {
+            twoThirdsFilter3D(modes);
+        }
     }
 
     void projectSpectralVorticityModes3D() {
@@ -405,17 +423,13 @@
 
     void spectralSolveParticles() {
         spectralScatter3D();
-        if (useHouLiFilter()) {
-            Hou_Li_filter(omega_x_hat_m);
-            Hou_Li_filter(omega_y_hat_m);
-            Hou_Li_filter(omega_z_hat_m);
-        }
+        applyConfiguredSpectralFilter3D(omega_x_hat_m);
+        applyConfiguredSpectralFilter3D(omega_y_hat_m);
+        applyConfiguredSpectralFilter3D(omega_z_hat_m);
         computeSpectralVelocityModes3D();
-        if (useHouLiFilter()) {
-            Hou_Li_filter(ux_hat_m);
-            Hou_Li_filter(uy_hat_m);
-            Hou_Li_filter(uz_hat_m);
-        }
+        applyConfiguredSpectralFilter3D(ux_hat_m);
+        applyConfiguredSpectralFilter3D(uy_hat_m);
+        applyConfiguredSpectralFilter3D(uz_hat_m);
         spectralGather3D();
     }
 

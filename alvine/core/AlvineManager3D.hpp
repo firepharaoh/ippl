@@ -126,6 +126,8 @@ public:
 
     bool useHouLiFilter() const { return spectral_filter_m == 2; }
 
+    bool useTwoThirdsFilter() const { return spectral_filter_m == 3; }
+
     bool useRK4() const { return time_integrator_m == "rk4"; }
 
     bool useLeapFrog() const { return time_integrator_m == "leapfrog"; }
