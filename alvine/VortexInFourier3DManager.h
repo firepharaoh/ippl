@@ -288,6 +288,7 @@ public:
         IpplTimings::startTimer(PTimer);
         if (diagnostics) {
             this->logSpectralDiagnostics3D();
+            this->logSpectralVorticitySpectrum3D();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             this->logTaylorGreenDiagnostics3D();
@@ -329,6 +330,7 @@ public:
         IpplTimings::startTimer(PTimer);
         if (diagnostics) {
             this->logSpectralDiagnostics3D();
+            this->logSpectralVorticitySpectrum3D();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             this->logTaylorGreenDiagnostics3D();
@@ -561,6 +563,7 @@ public:
         IpplTimings::startTimer(PTimer);
         if (shouldLogDiagnostics3D()) {
             this->logSpectralDiagnostics3D();
+            this->logSpectralVorticitySpectrum3D();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             this->logTaylorGreenDiagnostics3D();

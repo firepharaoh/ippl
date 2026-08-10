@@ -114,6 +114,132 @@
         return computeSpectralEnstrophy3D();
     }
 
+    std::vector<VorticitySpectrumShell> computeSpectralVorticitySpectrum3D() {
+        auto ox = omega_x_hat_m.getView();
+        auto oy = omega_y_hat_m.getView();
+        auto oz = omega_z_hat_m.getView();
+
+        auto& layout       = omega_x_hat_m.getLayout();
+        auto& mesh         = omega_x_hat_m.get_mesh();
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const auto& dx     = mesh.getMeshSpacing();
+        const int nghost   = omega_x_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const int Nz = domain[2].length();
+
+        const T Lx     = dx[0] * Nx;
+        const T Ly     = dx[1] * Ny;
+        const T Lz     = dx[2] * Nz;
+        const T volume = Lx * Ly * Lz;
+
+        const int maxShell = static_cast<int>(std::floor(std::sqrt(
+            static_cast<double>(Nx / 2) * static_cast<double>(Nx / 2)
+            + static_cast<double>(Ny / 2) * static_cast<double>(Ny / 2)
+            + static_cast<double>(Nz / 2) * static_cast<double>(Nz / 2))));
+        const int shellCount = maxShell + 1;
+
+        Kokkos::View<double*> localSpectrum("local_vorticity_spectrum_3d", shellCount);
+        Kokkos::View<std::uint64_t*> localModeCounts(
+            "local_vorticity_spectrum_3d_mode_counts", shellCount);
+        Kokkos::deep_copy(localSpectrum, 0.0);
+        Kokkos::deep_copy(localModeCounts, std::uint64_t(0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "compute_spectral_vorticity_spectrum_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const T radius2 = T(mx) * T(mx) + T(my) * T(my) + T(mz) * T(mz);
+                const int shell = static_cast<int>(Kokkos::floor(Kokkos::sqrt(radius2)));
+
+                const auto oxMode = ox(i, j, k);
+                const auto oyMode = oy(i, j, k);
+                const auto ozMode = oz(i, j, k);
+
+                const double ox2 = oxMode.real() * oxMode.real()
+                                 + oxMode.imag() * oxMode.imag();
+                const double oy2 = oyMode.real() * oyMode.real()
+                                 + oyMode.imag() * oyMode.imag();
+                const double oz2 = ozMode.real() * ozMode.real()
+                                 + ozMode.imag() * ozMode.imag();
+
+                Kokkos::atomic_add(&localSpectrum(shell), 0.5 * (ox2 + oy2 + oz2) / volume);
+                Kokkos::atomic_add(&localModeCounts(shell), std::uint64_t(1));
+            });
+        Kokkos::fence();
+
+        auto hostSpectrum =
+            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), localSpectrum);
+        auto hostModeCounts =
+            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), localModeCounts);
+
+        std::vector<double> localValues(shellCount);
+        std::vector<double> globalValues(shellCount);
+        std::vector<std::uint64_t> localCounts(shellCount);
+        std::vector<std::uint64_t> globalCounts(shellCount);
+        for (int shell = 0; shell < shellCount; ++shell) {
+            localValues[shell] = hostSpectrum(shell);
+            localCounts[shell] = hostModeCounts(shell);
+        }
+
+        ippl::Comm->allreduce(
+            localValues.data(), globalValues.data(), shellCount, std::plus<double>());
+        ippl::Comm->allreduce(
+            localCounts.data(), globalCounts.data(), shellCount, std::plus<std::uint64_t>());
+
+        const int completeShellLimit = std::min({Nx, Ny, Nz}) / 2;
+        std::vector<VorticitySpectrumShell> spectrum(shellCount);
+        for (int shell = 0; shell < shellCount; ++shell) {
+            spectrum[shell].enstrophy = globalValues[shell];
+            spectrum[shell].modeCount = globalCounts[shell];
+            spectrum[shell].complete  = shell < completeShellLimit;
+        }
+        return spectrum;
+    }
+
+    void logSpectralVorticitySpectrum3D(
+        const std::string& filename = "vorticity_spectrum_3d.csv") {
+        const auto spectrum = computeSpectralVorticitySpectrum3D();
+
+        if (ippl::Comm->rank() == 0) {
+            const bool firstWrite = !spectral_3d_vorticity_spectrum_initialized_m;
+            std::ofstream out(diagnosticFileName(filename),
+                              firstWrite ? std::ios::out : std::ios::app);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+
+            if (firstWrite) {
+                out << "method,dt,step,time,k,vorticity_spectrum,mode_count,complete\n";
+            }
+
+            for (std::size_t shell = 0; shell < spectrum.size(); ++shell) {
+                out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
+                    << shell << "," << spectrum[shell].enstrophy << ","
+                    << spectrum[shell].modeCount << ","
+                    << (spectrum[shell].complete ? 1 : 0) << "\n";
+            }
+
+            Inform m("vorticity_spectrum_3d ");
+            m << "step = " << it_m << ", shells = " << spectrum.size() << endl;
+        }
+
+        spectral_3d_vorticity_spectrum_initialized_m = true;
+    }
+
     double computeSpectralDivergenceL23D() {
         auto ux = ux_hat_m.getView();
         auto uy = uy_hat_m.getView();

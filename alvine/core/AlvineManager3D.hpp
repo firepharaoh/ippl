@@ -4,6 +4,7 @@
 #include <array>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cmath>
 #include <functional>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "../fields/FieldContainer.hpp"
 #include "../FieldSolver.hpp"
@@ -27,6 +29,12 @@ class AlvineManager3D
                               LoadBalancer<T, 3>> {
 public:
     static constexpr unsigned Dim = 3;
+
+    struct VorticitySpectrumShell {
+        double enstrophy = 0.0;
+        std::uint64_t modeCount = 0;
+        bool complete = false;
+    };
 
     using ParticleContainer_t = ParticleContainer<T, Dim>;
     using FieldContainer_t    = FieldContainer<T, Dim>;
@@ -87,6 +95,7 @@ protected:
     ComplexField_t viscosity_z_hat_m;
     RealField_t Sk_m;
     bool spectral_3d_diagnostics_initialized_m = false;
+    bool spectral_3d_vorticity_spectrum_initialized_m = false;
     bool spectral_3d_dissipation_initialized_m = false;
     double spectral_3d_initial_energy_m = 0.0;
     double spectral_3d_previous_time_m = 0.0;
