@@ -2,7 +2,9 @@
 #define IPPL_VORTEX_IN_FOURIER_3D_MANAGER_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -77,6 +79,7 @@ public:
 
         initializeParticles();
         this->initNUFFT3D();
+        logInitialTaylorGreenStretchingProbe3D();
     }
 
     void advance() override {
@@ -401,6 +404,310 @@ public:
             });
         Kokkos::fence();
         IpplTimings::stopTimer(stretchingTimer);
+    }
+
+    void logInitialTaylorGreenStretchingProbe3D(
+        const std::string& filename = "tgv_3d_stretching_rhs_probe.csv") {
+        refreshSpectralVorticityModes3D(true);
+        this->computeSpectralVelocityModes3D();
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->computeSpectralVelocityGradientModes3D();
+        this->spectralGatherGradientModes3D();
+
+        auto& pc = *this->pcontainer_m;
+        auto R = pc.R.getView();
+        auto omega = pc.omega.getView();
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
+        const auto n = pc.getLocalNum();
+
+        const unsigned nxp = static_cast<unsigned>(
+            std::round(std::cbrt(static_cast<double>(this->np_m))));
+        const T dxp = T(this->rmax_m[0] - this->rmin_m[0]) / nxp;
+        const T dyp = T(this->rmax_m[1] - this->rmin_m[1]) / nxp;
+        const T dzp = T(this->rmax_m[2] - this->rmin_m[2]) / nxp;
+        const T particleVolume = dxp * dyp * dzp;
+
+        const std::array<std::string, 9> gradNames = {
+            "duxdx", "duxdy", "duxdz",
+            "duydx", "duydy", "duydz",
+            "duzdx", "duzdy", "duzdz"
+        };
+        const std::array<std::string, 3> stretchNames = {"Sx", "Sy", "Sz"};
+
+        struct ProbeMetrics {
+            double relL2 = 0.0;
+            double linf = 0.0;
+            double refLinf = 0.0;
+            double scale = 0.0;
+            double err2 = 0.0;
+            double ref2 = 0.0;
+            double num2 = 0.0;
+        };
+
+        std::array<ProbeMetrics, 9> gradMetrics;
+        std::array<ProbeMetrics, 3> stretchMetrics;
+
+        auto finishMetrics = [](double localErr2, double localRef2, double localDot,
+                                double localNum2, double localLinf, double localRefLinf) {
+            ProbeMetrics metrics;
+            ippl::Comm->allreduce(localErr2, metrics.err2, 1, std::plus<double>());
+            ippl::Comm->allreduce(localRef2, metrics.ref2, 1, std::plus<double>());
+            double globalDot = 0.0;
+            ippl::Comm->allreduce(localDot, globalDot, 1, std::plus<double>());
+            ippl::Comm->allreduce(localNum2, metrics.num2, 1, std::plus<double>());
+            ippl::Comm->allreduce(localLinf, metrics.linf, 1, std::greater<double>());
+            ippl::Comm->allreduce(localRefLinf, metrics.refLinf, 1, std::greater<double>());
+
+            metrics.relL2 = metrics.ref2 > 1e-30
+                                ? std::sqrt(metrics.err2 / metrics.ref2)
+                                : std::sqrt(metrics.err2);
+            metrics.scale = metrics.ref2 > 1e-30 ? globalDot / metrics.ref2 : 0.0;
+            return metrics;
+        };
+
+        for (int component = 0; component < 9; ++component) {
+            double localErr2 = 0.0;
+            double localRef2 = 0.0;
+            double localDot = 0.0;
+            double localNum2 = 0.0;
+            double localLinf = 0.0;
+            double localRefLinf = 0.0;
+
+            Kokkos::parallel_reduce(
+                "tgv_3d_initial_gradient_component_probe",
+                n,
+                KOKKOS_LAMBDA(const size_t p,
+                              double& err2, double& ref2, double& dot, double& num2,
+                              double& linf, double& refLinf) {
+                    const T x = R(p)[0];
+                    const T y = R(p)[1];
+                    const T z = R(p)[2];
+
+                    const T sx = Kokkos::sin(x);
+                    const T cx = Kokkos::cos(x);
+                    const T sy = Kokkos::sin(y);
+                    const T cy = Kokkos::cos(y);
+                    const T sz = Kokkos::sin(z);
+                    const T cz = Kokkos::cos(z);
+
+                    T numerical = T(0.0);
+                    T exact = T(0.0);
+                    switch (component) {
+                    case 0:
+                        numerical = duxdx(p);
+                        exact = cx * cy * cz;
+                        break;
+                    case 1:
+                        numerical = duxdy(p);
+                        exact = -sx * sy * cz;
+                        break;
+                    case 2:
+                        numerical = duxdz(p);
+                        exact = -sx * cy * sz;
+                        break;
+                    case 3:
+                        numerical = duydx(p);
+                        exact = sx * sy * cz;
+                        break;
+                    case 4:
+                        numerical = duydy(p);
+                        exact = -cx * cy * cz;
+                        break;
+                    case 5:
+                        numerical = duydz(p);
+                        exact = cx * sy * sz;
+                        break;
+                    case 6:
+                        numerical = duzdx(p);
+                        exact = T(0.0);
+                        break;
+                    case 7:
+                        numerical = duzdy(p);
+                        exact = T(0.0);
+                        break;
+                    default:
+                        numerical = duzdz(p);
+                        exact = T(0.0);
+                        break;
+                    }
+
+                    const T diff = numerical - exact;
+                    err2 += diff * diff;
+                    ref2 += exact * exact;
+                    dot += numerical * exact;
+                    num2 += numerical * numerical;
+                    linf = Kokkos::max(linf, static_cast<double>(Kokkos::abs(diff)));
+                    refLinf = Kokkos::max(refLinf, static_cast<double>(Kokkos::abs(exact)));
+                },
+                Kokkos::Sum<double>(localErr2),
+                Kokkos::Sum<double>(localRef2),
+                Kokkos::Sum<double>(localDot),
+                Kokkos::Sum<double>(localNum2),
+                Kokkos::Max<double>(localLinf),
+                Kokkos::Max<double>(localRefLinf));
+
+            gradMetrics[component] =
+                finishMetrics(localErr2, localRef2, localDot, localNum2,
+                              localLinf, localRefLinf);
+        }
+
+        for (int component = 0; component < 3; ++component) {
+            double localErr2 = 0.0;
+            double localRef2 = 0.0;
+            double localDot = 0.0;
+            double localNum2 = 0.0;
+            double localLinf = 0.0;
+            double localRefLinf = 0.0;
+
+            Kokkos::parallel_reduce(
+                "tgv_3d_initial_stretching_component_probe",
+                n,
+                KOKKOS_LAMBDA(const size_t p,
+                              double& err2, double& ref2, double& dot, double& num2,
+                              double& linf, double& refLinf) {
+                    const T x = R(p)[0];
+                    const T y = R(p)[1];
+                    const T z = R(p)[2];
+
+                    const T sx = Kokkos::sin(x);
+                    const T cx = Kokkos::cos(x);
+                    const T sy = Kokkos::sin(y);
+                    const T cy = Kokkos::cos(y);
+                    const T sz = Kokkos::sin(z);
+                    const T cz = Kokkos::cos(z);
+
+                    const T omegaXPhysical = -cx * sy * sz;
+                    const T omegaYPhysical = -sx * cy * sz;
+                    const T omegaZPhysical = T(2.0) * sx * sy * cz;
+
+                    const T exactDuxdx = cx * cy * cz;
+                    const T exactDuxdy = -sx * sy * cz;
+                    const T exactDuxdz = -sx * cy * sz;
+                    const T exactDuydx = sx * sy * cz;
+                    const T exactDuydy = -cx * cy * cz;
+                    const T exactDuydz = cx * sy * sz;
+
+                    const T numericalSx =
+                        omega(p)[0] * duxdx(p) + omega(p)[1] * duxdy(p)
+                        + omega(p)[2] * duxdz(p);
+                    const T numericalSy =
+                        omega(p)[0] * duydx(p) + omega(p)[1] * duydy(p)
+                        + omega(p)[2] * duydz(p);
+                    const T numericalSz =
+                        omega(p)[0] * duzdx(p) + omega(p)[1] * duzdy(p)
+                        + omega(p)[2] * duzdz(p);
+
+                    const T exactSx = particleVolume *
+                        (omegaXPhysical * exactDuxdx + omegaYPhysical * exactDuxdy
+                         + omegaZPhysical * exactDuxdz);
+                    const T exactSy = particleVolume *
+                        (omegaXPhysical * exactDuydx + omegaYPhysical * exactDuydy
+                         + omegaZPhysical * exactDuydz);
+                    const T exactSz = T(0.0);
+
+                    T numerical = numericalSx;
+                    T exact = exactSx;
+                    if (component == 1) {
+                        numerical = numericalSy;
+                        exact = exactSy;
+                    } else if (component == 2) {
+                        numerical = numericalSz;
+                        exact = exactSz;
+                    }
+
+                    const T diff = numerical - exact;
+                    err2 += diff * diff;
+                    ref2 += exact * exact;
+                    dot += numerical * exact;
+                    num2 += numerical * numerical;
+                    linf = Kokkos::max(linf, static_cast<double>(Kokkos::abs(diff)));
+                    refLinf = Kokkos::max(refLinf, static_cast<double>(Kokkos::abs(exact)));
+                },
+                Kokkos::Sum<double>(localErr2),
+                Kokkos::Sum<double>(localRef2),
+                Kokkos::Sum<double>(localDot),
+                Kokkos::Sum<double>(localNum2),
+                Kokkos::Max<double>(localLinf),
+                Kokkos::Max<double>(localRefLinf));
+
+            stretchMetrics[component] =
+                finishMetrics(localErr2, localRef2, localDot, localNum2,
+                              localLinf, localRefLinf);
+        }
+
+        double gradErr2 = 0.0;
+        double gradRef2 = 0.0;
+        double gradNum2 = 0.0;
+        for (const auto& metrics : gradMetrics) {
+            gradErr2 += metrics.err2;
+            gradRef2 += metrics.ref2;
+            gradNum2 += metrics.num2;
+        }
+
+        double stretchErr2 = 0.0;
+        double stretchRef2 = 0.0;
+        double stretchNum2 = 0.0;
+        for (const auto& metrics : stretchMetrics) {
+            stretchErr2 += metrics.err2;
+            stretchRef2 += metrics.ref2;
+            stretchNum2 += metrics.num2;
+        }
+
+        if (ippl::Comm->rank() == 0) {
+            std::ofstream out(diagnosticFileName(filename), std::ios::out);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+            out << "method,dt,step,time,kind,component,rel_l2,linf,ref_linf,"
+                << "projection_scale,norm_ratio,err2,ref2,num2\n";
+
+            auto writeMetrics = [&](const std::string& kind, const std::string& name,
+                                    const ProbeMetrics& metrics) {
+                const double normRatio = metrics.ref2 > 1e-30
+                                             ? std::sqrt(metrics.num2 / metrics.ref2)
+                                             : std::sqrt(metrics.num2);
+                out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
+                    << kind << "," << name << "," << metrics.relL2 << ","
+                    << metrics.linf << "," << metrics.refLinf << ","
+                    << metrics.scale << "," << normRatio << ","
+                    << metrics.err2 << "," << metrics.ref2 << "," << metrics.num2
+                    << "\n";
+            };
+
+            for (int c = 0; c < 9; ++c) {
+                writeMetrics("gradient", gradNames[c], gradMetrics[c]);
+            }
+            for (int c = 0; c < 3; ++c) {
+                writeMetrics("stretching", stretchNames[c], stretchMetrics[c]);
+            }
+
+            const double gradRelL2 =
+                gradRef2 > 1e-30 ? std::sqrt(gradErr2 / gradRef2) : std::sqrt(gradErr2);
+            const double gradNormRatio =
+                gradRef2 > 1e-30 ? std::sqrt(gradNum2 / gradRef2) : std::sqrt(gradNum2);
+            const double stretchRelL2 =
+                stretchRef2 > 1e-30 ? std::sqrt(stretchErr2 / stretchRef2)
+                                     : std::sqrt(stretchErr2);
+            const double stretchNormRatio =
+                stretchRef2 > 1e-30 ? std::sqrt(stretchNum2 / stretchRef2)
+                                     : std::sqrt(stretchNum2);
+
+            Inform m("tgv_3d_stretching_rhs_probe ");
+            m << "gradientRelL2 = " << gradRelL2
+              << ", gradientNormRatio = " << gradNormRatio
+              << ", stretchingRelL2 = " << stretchRelL2
+              << ", stretchingNormRatio = " << stretchNormRatio
+              << ", file = " << diagnosticFileName(filename) << endl;
+        }
     }
 
     void setRK4StageState(typename ParticleContainer_t::particle_position_type& baseR,
