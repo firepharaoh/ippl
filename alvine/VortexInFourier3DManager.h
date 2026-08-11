@@ -354,16 +354,16 @@ public:
             IpplTimings::getTimer("vortexStretching");
 
         auto& pc = *this->pcontainer_m;
-        // auto omega = pc.omega.getView();
-        // auto duxdx = pc.duxdx.getView();
-        // auto duxdy = pc.duxdy.getView();
-        // auto duxdz = pc.duxdz.getView();
-        // auto duydx = pc.duydx.getView();
-        // auto duydy = pc.duydy.getView();
-        // auto duydz = pc.duydz.getView();
-        // auto duzdx = pc.duzdx.getView();
-        // auto duzdy = pc.duzdy.getView();
-        // auto duzdz = pc.duzdz.getView();
+        auto omega = pc.omega.getView();
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
         auto viscosity = pc.viscosity.getView();
         auto rhs = target.getView();
         const auto n = pc.getLocalNum();
@@ -381,17 +381,13 @@ public:
             "store_rk4_vorticity_rhs_3d",
             n,
             KOKKOS_LAMBDA(const size_t p) {
-                rhs(p)[0] = T(0.0);
-                rhs(p)[1] = T(0.0);
-                rhs(p)[2] = T(0.0);
+                const T omegaX = omega(p)[0];
+                const T omegaY = omega(p)[1];
+                const T omegaZ = omega(p)[2];
 
-                // Vortex stretching disabled temporarily for gradient-path debugging.
-                // const T omegaX = omega(p)[0];
-                // const T omegaY = omega(p)[1];
-                // const T omegaZ = omega(p)[2];
-                // rhs(p)[0] = omegaX * duxdx(p) + omegaY * duxdy(p) + omegaZ * duxdz(p);
-                // rhs(p)[1] = omegaX * duydx(p) + omegaY * duydy(p) + omegaZ * duydz(p);
-                // rhs(p)[2] = omegaX * duzdx(p) + omegaY * duzdy(p) + omegaZ * duzdz(p);
+                rhs(p)[0] = omegaX * duxdx(p) + omegaY * duxdy(p) + omegaZ * duxdz(p);
+                rhs(p)[1] = omegaX * duydx(p) + omegaY * duydy(p) + omegaZ * duydz(p);
+                rhs(p)[2] = omegaX * duzdx(p) + omegaY * duzdy(p) + omegaZ * duzdz(p);
 
                 if (useViscosity) {
                     rhs(p)[0] += viscosity(p)[0] * particleVolume;
@@ -429,7 +425,9 @@ public:
             n,
             KOKKOS_LAMBDA(const size_t p) {
                 for (unsigned d = 0; d < Dim; ++d) {
-                    R(p)[d] = baseRView(p)[d] + dtScale * kRView(p)[d];
+                    // Particle motion disabled temporarily for fixed-position debugging.
+                    // R(p)[d] = baseRView(p)[d] + dtScale * kRView(p)[d];
+                    R(p)[d] = baseRView(p)[d];
                     omega(p)[d] = baseOmegaView(p)[d] + dtScale * kOmegaView(p)[d];
                 }
                 omegaX(p) = omega(p)[0];
@@ -470,9 +468,11 @@ public:
             KOKKOS_LAMBDA(const size_t p) {
                 Rold(p) = R0(p);
                 for (unsigned d = 0; d < Dim; ++d) {
-                    R(p)[d] = R0(p)[d] + sixthDt *
-                        (kR1(p)[d] + T(2.0) * kR2(p)[d] +
-                         T(2.0) * kR3(p)[d] + kR4(p)[d]);
+                    // Particle motion disabled temporarily for fixed-position debugging.
+                    // R(p)[d] = R0(p)[d] + sixthDt *
+                    //     (kR1(p)[d] + T(2.0) * kR2(p)[d] +
+                    //      T(2.0) * kR3(p)[d] + kR4(p)[d]);
+                    R(p)[d] = R0(p)[d];
                     omega(p)[d] = omega0(p)[d] + sixthDt *
                         (kOmega1(p)[d] + T(2.0) * kOmega2(p)[d] +
                          T(2.0) * kOmega3(p)[d] + kOmega4(p)[d]);
@@ -533,9 +533,10 @@ public:
         pc->update();
         IpplTimings::stopTimer(updateTimer);
 
-        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
-            remeshParticles3D();
-        }
+        // Remeshing disabled temporarily for fixed-position debugging.
+        // if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+        //     remeshParticles3D();
+        // }
     }
 
     void LeapFrogStep() {
@@ -596,6 +597,9 @@ public:
         }
 
         IpplTimings::startTimer(RTimer);
+        // Particle motion disabled temporarily for fixed-position debugging.
+        pc->R_old = pc->R;
+        /*
         if (this->it_m == 0 || bootstrap_next_push_m) {
             pc->R_old = pc->R;
             pc->R = pc->R + pc->P * this->dt_m;
@@ -608,15 +612,17 @@ public:
             pc->R_old = pc->R;
             pc->R = R_old_temp + 2 * pc->P * this->dt_m;
         }
+        */
         IpplTimings::stopTimer(RTimer);
 
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
 
-        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
-            remeshParticles3D();
-        }
+        // Remeshing disabled temporarily for fixed-position debugging.
+        // if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+        //     remeshParticles3D();
+        // }
     }
 
     void par2grid() override {}
