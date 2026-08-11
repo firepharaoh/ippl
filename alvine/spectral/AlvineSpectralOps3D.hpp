@@ -542,20 +542,14 @@
         auto omegaZ = pc.omega_z.getView();
         const T dt = T(this->dt_m);
         const auto n = pc.getLocalNum();
-        const unsigned nxp = static_cast<unsigned>(
-            std::round(std::cbrt(static_cast<double>(this->np_m))));
-        const T dxp = T(this->rmax_m[0] - this->rmin_m[0]) / nxp;
-        const T dyp = T(this->rmax_m[1] - this->rmin_m[1]) / nxp;
-        const T dzp = T(this->rmax_m[2] - this->rmin_m[2]) / nxp;
-        const T particleVolume = dxp * dyp * dzp;
 
         Kokkos::parallel_for(
             "apply_particle_viscosity_3d",
             n,
             KOKKOS_LAMBDA(const size_t p) {
-                omega(p)[0] += dt * visc(p)[0] * particleVolume;
-                omega(p)[1] += dt * visc(p)[1] * particleVolume;
-                omega(p)[2] += dt * visc(p)[2] * particleVolume;
+                omega(p)[0] += dt * visc(p)[0];
+                omega(p)[1] += dt * visc(p)[1];
+                omega(p)[2] += dt * visc(p)[2];
                 omegaX(p) = omega(p)[0];
                 omegaY(p) = omega(p)[1];
                 omegaZ(p) = omega(p)[2];
