@@ -368,6 +368,12 @@ public:
         auto rhs = target.getView();
         const auto n = pc.getLocalNum();
 
+        const unsigned nxp = static_cast<unsigned>(
+            std::round(std::cbrt(static_cast<double>(this->np_m))));
+        const T dxp = T(this->rmax_m[0] - this->rmin_m[0]) / nxp;
+        const T dyp = T(this->rmax_m[1] - this->rmin_m[1]) / nxp;
+        const T dzp = T(this->rmax_m[2] - this->rmin_m[2]) / nxp;
+        const T particleVolume = dxp * dyp * dzp;
         const bool useViscosity = this->viscosity_m > 0.0;
 
         IpplTimings::startTimer(stretchingTimer);
@@ -384,9 +390,9 @@ public:
                 rhs(p)[2] = omegaX * duzdx(p) + omegaY * duzdy(p) + omegaZ * duzdz(p);
 
                 if (useViscosity) {
-                    rhs(p)[0] += viscosity(p)[0];
-                    rhs(p)[1] += viscosity(p)[1];
-                    rhs(p)[2] += viscosity(p)[2];
+                    rhs(p)[0] += viscosity(p)[0] * particleVolume;
+                    rhs(p)[1] += viscosity(p)[1] * particleVolume;
+                    rhs(p)[2] += viscosity(p)[2] * particleVolume;
                 }
             });
         Kokkos::fence();
