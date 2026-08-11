@@ -664,7 +664,8 @@ public:
         }
 
         if (ippl::Comm->rank() == 0) {
-            std::ofstream out(diagnosticFileName(filename), std::ios::out);
+            const std::string path = this->diagnosticFileName(filename);
+            std::ofstream out(path, std::ios::out);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
             out << "method,dt,step,time,kind,component,rel_l2,linf,ref_linf,"
@@ -675,8 +676,9 @@ public:
                 const double normRatio = metrics.ref2 > 1e-30
                                              ? std::sqrt(metrics.num2 / metrics.ref2)
                                              : std::sqrt(metrics.num2);
-                out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
-                    << kind << "," << name << "," << metrics.relL2 << ","
+                out << this->method_m << "," << this->dt_m << "," << this->it_m << ","
+                    << this->time_m << "," << kind << "," << name << ","
+                    << metrics.relL2 << ","
                     << metrics.linf << "," << metrics.refLinf << ","
                     << metrics.scale << "," << normRatio << ","
                     << metrics.err2 << "," << metrics.ref2 << "," << metrics.num2
@@ -706,7 +708,7 @@ public:
               << ", gradientNormRatio = " << gradNormRatio
               << ", stretchingRelL2 = " << stretchRelL2
               << ", stretchingNormRatio = " << stretchNormRatio
-              << ", file = " << diagnosticFileName(filename) << endl;
+              << ", file = " << path << endl;
         }
     }
 
