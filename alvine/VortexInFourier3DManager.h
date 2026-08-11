@@ -354,16 +354,16 @@ public:
             IpplTimings::getTimer("vortexStretching");
 
         auto& pc = *this->pcontainer_m;
-        auto omega = pc.omega.getView();
-        auto duxdx = pc.duxdx.getView();
-        auto duxdy = pc.duxdy.getView();
-        auto duxdz = pc.duxdz.getView();
-        auto duydx = pc.duydx.getView();
-        auto duydy = pc.duydy.getView();
-        auto duydz = pc.duydz.getView();
-        auto duzdx = pc.duzdx.getView();
-        auto duzdy = pc.duzdy.getView();
-        auto duzdz = pc.duzdz.getView();
+        // auto omega = pc.omega.getView();
+        // auto duxdx = pc.duxdx.getView();
+        // auto duxdy = pc.duxdy.getView();
+        // auto duxdz = pc.duxdz.getView();
+        // auto duydx = pc.duydx.getView();
+        // auto duydy = pc.duydy.getView();
+        // auto duydz = pc.duydz.getView();
+        // auto duzdx = pc.duzdx.getView();
+        // auto duzdy = pc.duzdy.getView();
+        // auto duzdz = pc.duzdz.getView();
         auto viscosity = pc.viscosity.getView();
         auto rhs = target.getView();
         const auto n = pc.getLocalNum();
@@ -381,13 +381,17 @@ public:
             "store_rk4_vorticity_rhs_3d",
             n,
             KOKKOS_LAMBDA(const size_t p) {
-                const T omegaX = omega(p)[0];
-                const T omegaY = omega(p)[1];
-                const T omegaZ = omega(p)[2];
+                rhs(p)[0] = T(0.0);
+                rhs(p)[1] = T(0.0);
+                rhs(p)[2] = T(0.0);
 
-                rhs(p)[0] = omegaX * duxdx(p) + omegaY * duxdy(p) + omegaZ * duxdz(p);
-                rhs(p)[1] = omegaX * duydx(p) + omegaY * duydy(p) + omegaZ * duydz(p);
-                rhs(p)[2] = omegaX * duzdx(p) + omegaY * duzdy(p) + omegaZ * duzdz(p);
+                // Vortex stretching disabled temporarily for gradient-path debugging.
+                // const T omegaX = omega(p)[0];
+                // const T omegaY = omega(p)[1];
+                // const T omegaZ = omega(p)[2];
+                // rhs(p)[0] = omegaX * duxdx(p) + omegaY * duxdy(p) + omegaZ * duxdz(p);
+                // rhs(p)[1] = omegaX * duydx(p) + omegaY * duydy(p) + omegaZ * duydz(p);
+                // rhs(p)[2] = omegaX * duzdx(p) + omegaY * duzdy(p) + omegaZ * duzdz(p);
 
                 if (useViscosity) {
                     rhs(p)[0] += viscosity(p)[0] * particleVolume;

@@ -854,43 +854,44 @@
         nufftType2_mp->transform(pc.R, pc.duzdz, duzdzModes);
     }
     void applyParticleVortexStretching3D() {
-        auto& pc = *this->pcontainer_m;
-        auto omega = pc.omega.getView();
-        auto duxdx = pc.duxdx.getView();
-        auto duxdy = pc.duxdy.getView();
-        auto duxdz = pc.duxdz.getView();
-        auto duydx = pc.duydx.getView();
-        auto duydy = pc.duydy.getView();
-        auto duydz = pc.duydz.getView();
-        auto duzdx = pc.duzdx.getView();
-        auto duzdy = pc.duzdy.getView();
-        auto duzdz = pc.duzdz.getView();
+        // Vortex stretching disabled temporarily for gradient-path debugging.
+        // auto& pc = *this->pcontainer_m;
+        // auto omega = pc.omega.getView();
+        // auto duxdx = pc.duxdx.getView();
+        // auto duxdy = pc.duxdy.getView();
+        // auto duxdz = pc.duxdz.getView();
+        // auto duydx = pc.duydx.getView();
+        // auto duydy = pc.duydy.getView();
+        // auto duydz = pc.duydz.getView();
+        // auto duzdx = pc.duzdx.getView();
+        // auto duzdy = pc.duzdy.getView();
+        // auto duzdz = pc.duzdz.getView();
 
-        const T dt = T(this->dt_m);
-        const auto n = pc.getLocalNum();
+        // const T dt = T(this->dt_m);
+        // const auto n = pc.getLocalNum();
 
-        Kokkos::parallel_for(
-            "apply_particle_vortex_stretching_3d",
-            n,
-            KOKKOS_LAMBDA(const size_t p) {
-                const T omegaX = omega(p)[0];
-                const T omegaY = omega(p)[1];
-                const T omegaZ = omega(p)[2];
+        // Kokkos::parallel_for(
+        //     "apply_particle_vortex_stretching_3d",
+        //     n,
+        //     KOKKOS_LAMBDA(const size_t p) {
+        //         const T omegaX = omega(p)[0];
+        //         const T omegaY = omega(p)[1];
+        //         const T omegaZ = omega(p)[2];
 
-                const T dUxdx = duxdx(p);
-                const T dUxdy = duxdy(p);
-                const T dUxdz = duxdz(p);
-                const T dUydx = duydx(p);
-                const T dUydy = duydy(p);
-                const T dUydz = duydz(p);
-                const T dUzdx = duzdx(p);
-                const T dUzdy = duzdy(p);
-                const T dUzdz = duzdz(p);
+        //         const T dUxdx = duxdx(p);
+        //         const T dUxdy = duxdy(p);
+        //         const T dUxdz = duxdz(p);
+        //         const T dUydx = duydx(p);
+        //         const T dUydy = duydy(p);
+        //         const T dUydz = duydz(p);
+        //         const T dUzdx = duzdx(p);
+        //         const T dUzdy = duzdy(p);
+        //         const T dUzdz = duzdz(p);
 
-                omega(p)[0] += dt * (omegaX * dUxdx + omegaY * dUxdy + omegaZ * dUxdz);
-                omega(p)[1] += dt * (omegaX * dUydx + omegaY * dUydy + omegaZ * dUydz);
-                omega(p)[2] += dt * (omegaX * dUzdx + omegaY * dUzdy + omegaZ * dUzdz);
-            });
-        Kokkos::fence();
+        //         omega(p)[0] += dt * (omegaX * dUxdx + omegaY * dUxdy + omegaZ * dUxdz);
+        //         omega(p)[1] += dt * (omegaX * dUydx + omegaY * dUydy + omegaZ * dUydz);
+        //         omega(p)[2] += dt * (omegaX * dUzdx + omegaY * dUzdy + omegaZ * dUzdz);
+        //     });
+        // Kokkos::fence();
     }
 #endif
