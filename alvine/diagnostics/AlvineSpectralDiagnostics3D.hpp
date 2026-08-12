@@ -47,9 +47,8 @@
         double globalEnergy = 0.0;
         ippl::Comm->allreduce(localEnergy, globalEnergy, 1, std::plus<double>());
 
-        // computeSpectralVelocityModes3D divides the raw type-1 NUFFT vorticity
-        // modes by volume, so ux_hat_m, uy_hat_m, and uz_hat_m are Fourier-series
-        // velocity coefficients. Parseval contributes one factor of volume.
+        // ux_hat_m, uy_hat_m, and uz_hat_m are Fourier-series velocity
+        // coefficients. Parseval contributes one factor of volume.
         return T(0.5) * volume * globalEnergy;
     }
 
@@ -62,8 +61,10 @@
         auto oy = omega_y_hat_m.getView();
         auto oz = omega_z_hat_m.getView();
 
+        auto& layout       = omega_x_hat_m.getLayout();
         auto& mesh         = omega_x_hat_m.get_mesh();
-        const auto& domain = omega_x_hat_m.getLayout().getDomain();
+        const auto& lDom   = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
         const auto& dx     = mesh.getMeshSpacing();
         const int nghost   = omega_x_hat_m.getNghost();
 
@@ -75,6 +76,7 @@
         const T Ly     = dx[1] * Ny;
         const T Lz     = dx[2] * Nz;
         const T volume = Lx * Ly * Lz;
+        const T twoPi  = T(2.0 * std::acos(-1.0));
 
         double localEnstrophy = 0.0;
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
@@ -85,16 +87,33 @@
                          static_cast<int>(ox.extent(1)) - nghost,
                          static_cast<int>(ox.extent(2)) - nghost}),
             KOKKOS_LAMBDA(const int i, const int j, const int k, double& lsum) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
                 const auto oxMode = ox(i, j, k);
                 const auto oyMode = oy(i, j, k);
                 const auto ozMode = oz(i, j, k);
 
-                const double ox2 = oxMode.real() * oxMode.real()
-                                 + oxMode.imag() * oxMode.imag();
-                const double oy2 = oyMode.real() * oyMode.real()
-                                 + oyMode.imag() * oyMode.imag();
-                const double oz2 = ozMode.real() * ozMode.real()
-                                 + ozMode.imag() * ozMode.imag();
+                const double ox2 = k2 * k2 * (oxMode.real() * oxMode.real()
+                                            + oxMode.imag() * oxMode.imag());
+                const double oy2 = k2 * k2 * (oyMode.real() * oyMode.real()
+                                            + oyMode.imag() * oyMode.imag());
+                const double oz2 = k2 * k2 * (ozMode.real() * ozMode.real()
+                                            + ozMode.imag() * ozMode.imag());
 
                 lsum += ox2 + oy2 + oz2;
             },
@@ -103,11 +122,9 @@
         double globalEnstrophy = 0.0;
         ippl::Comm->allreduce(localEnstrophy, globalEnstrophy, 1, std::plus<double>());
 
-        // The 3D NUFFT type-1 modes represent Fourier integrals:
-        // omega_hat_raw = volume * omega_hat. With Parseval,
-        // Z = 0.5 * volume * sum(|omega_hat|^2), hence
-        // Z = 0.5 * sum(|omega_hat_raw|^2) / volume.
-        return T(0.5) * globalEnstrophy / volume;
+        // omega_*_hat_m stores omega_hat / k^2 after spectral scatter.
+        // Recover omega_hat by multiplying by k^2 before applying Parseval.
+        return T(0.5) * volume * globalEnstrophy;
     }
 
     double computeSpectralEnstrophy() {
@@ -134,6 +151,7 @@
         const T Ly     = dx[1] * Ny;
         const T Lz     = dx[2] * Nz;
         const T volume = Lx * Ly * Lz;
+        const T twoPi  = T(2.0 * std::acos(-1.0));
 
         const int maxShell = static_cast<int>(std::floor(std::sqrt(
             static_cast<double>(Nx / 2) * static_cast<double>(Nx / 2)
@@ -163,6 +181,15 @@
                 const int my = (gy <= Ny / 2) ? gy : gy - Ny;
                 const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
 
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
                 const T radius2 = T(mx) * T(mx) + T(my) * T(my) + T(mz) * T(mz);
                 const int shell = static_cast<int>(Kokkos::floor(Kokkos::sqrt(radius2)));
 
@@ -170,14 +197,14 @@
                 const auto oyMode = oy(i, j, k);
                 const auto ozMode = oz(i, j, k);
 
-                const double ox2 = oxMode.real() * oxMode.real()
-                                 + oxMode.imag() * oxMode.imag();
-                const double oy2 = oyMode.real() * oyMode.real()
-                                 + oyMode.imag() * oyMode.imag();
-                const double oz2 = ozMode.real() * ozMode.real()
-                                 + ozMode.imag() * ozMode.imag();
+                const double ox2 = k2 * k2 * (oxMode.real() * oxMode.real()
+                                            + oxMode.imag() * oxMode.imag());
+                const double oy2 = k2 * k2 * (oyMode.real() * oyMode.real()
+                                            + oyMode.imag() * oyMode.imag());
+                const double oz2 = k2 * k2 * (ozMode.real() * ozMode.real()
+                                            + ozMode.imag() * ozMode.imag());
 
-                Kokkos::atomic_add(&localSpectrum(shell), 0.5 * (ox2 + oy2 + oz2) / volume);
+                Kokkos::atomic_add(&localSpectrum(shell), 0.5 * volume * (ox2 + oy2 + oz2));
                 Kokkos::atomic_add(&localModeCounts(shell), std::uint64_t(1));
             });
         Kokkos::fence();
@@ -351,9 +378,10 @@
                 const T kx = notMidX * twoPi * mx / Lx;
                 const T ky = notMidY * twoPi * my / Ly;
                 const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
 
                 const auto divHat =
-                    imag * (kx * ox(i, j, k) + ky * oy(i, j, k) + kz * oz(i, j, k));
+                    imag * k2 * (kx * ox(i, j, k) + ky * oy(i, j, k) + kz * oz(i, j, k));
                 lsum += divHat.real() * divHat.real() + divHat.imag() * divHat.imag();
             },
             localDiv2);
@@ -361,10 +389,9 @@
         double globalDiv2 = 0.0;
         ippl::Comm->allreduce(localDiv2, globalDiv2, 1, std::plus<double>());
 
-        // omega_*_hat_m stores raw type-1 NUFFT integral modes. Dividing by
-        // volume gives Fourier-series coefficients; Parseval then contributes
-        // one factor of volume, giving globalDiv2 / volume.
-        return std::sqrt(globalDiv2 / volume);
+        // omega_*_hat_m stores omega_hat / k^2 after spectral scatter.
+        // Recover omega_hat by multiplying by k^2 before applying Parseval.
+        return std::sqrt(volume * globalDiv2);
     }
 
     double computeTGVSpectralVelocityProjectionScale3D() {
@@ -445,6 +472,10 @@
         const int Nx = nr_m[0];
         const int Ny = nr_m[1];
         const int Nz = nr_m[2];
+        const T Lx = rmax_m[0] - rmin_m[0];
+        const T Ly = rmax_m[1] - rmin_m[1];
+        const T Lz = rmax_m[2] - rmin_m[2];
+        const T twoPi = T(2.0 * std::acos(-1.0));
 
         double localDot = 0.0;
         double localRef2 = 0.0;
@@ -465,6 +496,15 @@
                 const int my = (gy <= Ny / 2) ? gy : gy - Ny;
                 const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
 
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
                 if ((mx == 1 || mx == -1) && (my == 1 || my == -1) &&
                     (mz == 1 || mz == -1)) {
                     const T sx = mx > 0 ? T(1.0) : T(-1.0);
@@ -479,9 +519,9 @@
                     const Kokkos::complex<T> oyExact(sx * sz / T(8.0), T(0.0));
                     const Kokkos::complex<T> ozExact(-sx * sy / T(4.0), T(0.0));
 
-                    const auto oxMode = ox(i, j, k);
-                    const auto oyMode = oy(i, j, k);
-                    const auto ozMode = oz(i, j, k);
+                    const auto oxMode = k2 * ox(i, j, k);
+                    const auto oyMode = k2 * oy(i, j, k);
+                    const auto ozMode = k2 * oz(i, j, k);
 
                     dot += oxMode.real() * oxExact.real() + oxMode.imag() * oxExact.imag()
                          + oyMode.real() * oyExact.real() + oyMode.imag() * oyExact.imag()

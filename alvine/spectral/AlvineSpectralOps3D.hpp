@@ -34,6 +34,61 @@
         if (applyShapeFilter && useShapeFunctionFilter()) {
             applyShapeFunctionToSpectralVorticityModes3D();
         }
+
+        auto oxModes = omega_x_hat_m.getView();
+        auto oyModes = omega_y_hat_m.getView();
+        auto ozModes = omega_z_hat_m.getView();
+        auto& layout = omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = omega_x_hat_m.getNghost();
+
+        const int Nx = nr_m[0];
+        const int Ny = nr_m[1];
+        const int Nz = nr_m[2];
+
+        const T Lx = rmax_m[0] - rmin_m[0];
+        const T Ly = rmax_m[1] - rmin_m[1];
+        const T Lz = rmax_m[2] - rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "precondition_spectral_vorticity_modes_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(oxModes.extent(0)) - nghost,
+                         static_cast<int>(oxModes.extent(1)) - nghost,
+                         static_cast<int>(oxModes.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                if (k2 == T(0)) {
+                    oxModes(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    oyModes(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    ozModes(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    return;
+                }
+
+                const T invVolumeK2 = T(1.0) / (volume * k2);
+                oxModes(i, j, k) *= invVolumeK2;
+                oyModes(i, j, k) *= invVolumeK2;
+                ozModes(i, j, k) *= invVolumeK2;
+            });
         Kokkos::fence();
     }
 
@@ -258,7 +313,6 @@
         const T Lx = rmax_m[0] - rmin_m[0];
         const T Ly = rmax_m[1] - rmin_m[1];
         const T Lz = rmax_m[2] - rmin_m[2];
-        const T volume = Lx * Ly * Lz;
 
         const T twoPi = T(2.0 * std::acos(-1.0));
         const Kokkos::complex<T> imag(0.0, 1.0);
@@ -297,11 +351,9 @@
                     uy(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
                     uz(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
                 } else {
-                    const auto invVolumeK2 = T(1.0) / (volume * k2);
-
-                    ux(i, j, k) = imag * (ky * oz(i, j, k) - kz * oy(i, j, k)) * invVolumeK2;
-                    uy(i, j, k) = imag * (kz * ox(i, j, k) - kx * oz(i, j, k)) * invVolumeK2;
-                    uz(i, j, k) = imag * (kx * oy(i, j, k) - ky * ox(i, j, k)) * invVolumeK2;
+                    ux(i, j, k) = imag * (ky * oz(i, j, k) - kz * oy(i, j, k));
+                    uy(i, j, k) = imag * (kz * ox(i, j, k) - kx * oz(i, j, k));
+                    uz(i, j, k) = imag * (kx * oy(i, j, k) - ky * ox(i, j, k));
                 }
 
             }
@@ -457,7 +509,6 @@
         const T Lx = dx[0] * Nx;
         const T Ly = dx[1] * Ny;
         const T Lz = dx[2] * Nz;
-        const T volume = Lx * Ly * Lz;
 
         const T twoPi = T(2.0 * std::acos(-1.0));
         const T nu = T(viscosity_m);
@@ -488,9 +539,9 @@
 
                 const T k2 = kx * kx + ky * ky + kz * kz;
 
-                viscX(i, j, k) = -nu * k2 * ox(i, j, k) / volume;
-                viscY(i, j, k) = -nu * k2 * oy(i, j, k) / volume;
-                viscZ(i, j, k) = -nu * k2 * oz(i, j, k) / volume;
+                viscX(i, j, k) = -nu * k2 * k2 * ox(i, j, k);
+                viscY(i, j, k) = -nu * k2 * k2 * oy(i, j, k);
+                viscZ(i, j, k) = -nu * k2 * k2 * oz(i, j, k);
             }
         );
         Kokkos::fence();
@@ -611,15 +662,53 @@
         auto oyModes = omega_y_hat_m.deepCopy();
         auto ozModes = omega_z_hat_m.deepCopy();
 
-        const auto& domain = omega_x_hat_m.getLayout().getDomain();
+        auto oxView = oxModes.getView();
+        auto oyView = oyModes.getView();
+        auto ozView = ozModes.getView();
+        auto& layout = omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
         const auto& dx = omega_x_hat_m.get_mesh().getMeshSpacing();
-        const T volume = (dx[0] * domain[0].length()) *
-                         (dx[1] * domain[1].length()) *
-                         (dx[2] * domain[2].length());
+        const int spectralNghost = omega_x_hat_m.getNghost();
 
-        oxModes = oxModes / volume;
-        oyModes = oyModes / volume;
-        ozModes = ozModes / volume;
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const int Nz = domain[2].length();
+        const T Lx = dx[0] * Nx;
+        const T Ly = dx[1] * Ny;
+        const T Lz = dx[2] * Nz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using spectral_policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "recover_spectral_vorticity_modes_3d",
+            spectral_policy_type({spectralNghost, spectralNghost, spectralNghost},
+                                 {static_cast<int>(oxView.extent(0)) - spectralNghost,
+                                  static_cast<int>(oxView.extent(1)) - spectralNghost,
+                                  static_cast<int>(oxView.extent(2)) - spectralNghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - spectralNghost + lDom[0].first();
+                const int gy = j - spectralNghost + lDom[1].first();
+                const int gz = k - spectralNghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                oxView(i, j, k) *= k2;
+                oyView(i, j, k) *= k2;
+                ozView(i, j, k) *= k2;
+            });
+        Kokkos::fence();
 
         applyCellCenteredIfftPhase3D(oxModes);
         applyCellCenteredIfftPhase3D(oyModes);

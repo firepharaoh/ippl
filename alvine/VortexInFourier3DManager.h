@@ -425,9 +425,7 @@ public:
             n,
             KOKKOS_LAMBDA(const size_t p) {
                 for (unsigned d = 0; d < Dim; ++d) {
-                    // Particle motion disabled temporarily for fixed-position debugging.
-                    // R(p)[d] = baseRView(p)[d] + dtScale * kRView(p)[d];
-                    R(p)[d] = baseRView(p)[d];
+                    R(p)[d] = baseRView(p)[d] + dtScale * kRView(p)[d];
                     omega(p)[d] = baseOmegaView(p)[d] + dtScale * kOmegaView(p)[d];
                 }
                 omegaX(p) = omega(p)[0];
@@ -468,11 +466,9 @@ public:
             KOKKOS_LAMBDA(const size_t p) {
                 Rold(p) = R0(p);
                 for (unsigned d = 0; d < Dim; ++d) {
-                    // Particle motion disabled temporarily for fixed-position debugging.
-                    // R(p)[d] = R0(p)[d] + sixthDt *
-                    //     (kR1(p)[d] + T(2.0) * kR2(p)[d] +
-                    //      T(2.0) * kR3(p)[d] + kR4(p)[d]);
-                    R(p)[d] = R0(p)[d];
+                    R(p)[d] = R0(p)[d] + sixthDt *
+                        (kR1(p)[d] + T(2.0) * kR2(p)[d] +
+                         T(2.0) * kR3(p)[d] + kR4(p)[d]);
                     omega(p)[d] = omega0(p)[d] + sixthDt *
                         (kOmega1(p)[d] + T(2.0) * kOmega2(p)[d] +
                          T(2.0) * kOmega3(p)[d] + kOmega4(p)[d]);
@@ -533,10 +529,9 @@ public:
         pc->update();
         IpplTimings::stopTimer(updateTimer);
 
-        // Remeshing disabled temporarily for fixed-position debugging.
-        // if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
-        //     remeshParticles3D();
-        // }
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            remeshParticles3D();
+        }
     }
 
     void LeapFrogStep() {
@@ -597,9 +592,6 @@ public:
         }
 
         IpplTimings::startTimer(RTimer);
-        // Particle motion disabled temporarily for fixed-position debugging.
-        pc->R_old = pc->R;
-        /*
         if (this->it_m == 0 || bootstrap_next_push_m) {
             pc->R_old = pc->R;
             pc->R = pc->R + pc->P * this->dt_m;
@@ -612,17 +604,15 @@ public:
             pc->R_old = pc->R;
             pc->R = R_old_temp + 2 * pc->P * this->dt_m;
         }
-        */
         IpplTimings::stopTimer(RTimer);
 
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
 
-        // Remeshing disabled temporarily for fixed-position debugging.
-        // if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
-        //     remeshParticles3D();
-        // }
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            remeshParticles3D();
+        }
     }
 
     void par2grid() override {}
