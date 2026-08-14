@@ -211,14 +211,16 @@
         }
     }
 
-    void projectSpectralVorticityModes3D() {
-        auto ox = omega_x_hat_m.getView();
-        auto oy = omega_y_hat_m.getView();
-        auto oz = omega_z_hat_m.getView();
+    void projectSpectralVorticityModes3D(ComplexField_t& omegaXModes,
+                                         ComplexField_t& omegaYModes,
+                                         ComplexField_t& omegaZModes) {
+        auto ox = omegaXModes.getView();
+        auto oy = omegaYModes.getView();
+        auto oz = omegaZModes.getView();
 
-        auto& layout = omega_x_hat_m.getLayout();
+        auto& layout = omegaXModes.getLayout();
         const auto& lDom = layout.getLocalNDIndex();
-        const int nghost = omega_x_hat_m.getNghost();
+        const int nghost = omegaXModes.getNghost();
 
         const int Nx = nr_m[0];
         const int Ny = nr_m[1];
@@ -287,15 +289,17 @@
     }
 
     void computeSpectralVelocityModes3D() {
-        // Ensure the vorticity modes are solenoidal before using the
-        // Biot-Savart relation. Filtering, remeshing, and particle scatter can
-        // introduce a small k-parallel component that would otherwise appear as
-        // nonzero div(omega) in diagnostics and downstream reconstructions.
-        projectSpectralVorticityModes3D();
+        // Ensure the vorticity modes used by Biot-Savart are solenoidal without
+        // mutating omega_*_hat_m. The stored vorticity modes remain the source
+        // of truth for diagnostics, remeshing, and reconstruction.
+        auto omegaXProjected = omega_x_hat_m.deepCopy();
+        auto omegaYProjected = omega_y_hat_m.deepCopy();
+        auto omegaZProjected = omega_z_hat_m.deepCopy();
+        projectSpectralVorticityModes3D(omegaXProjected, omegaYProjected, omegaZProjected);
 
-        auto ox = omega_x_hat_m.getView();
-        auto oy = omega_y_hat_m.getView();
-        auto oz = omega_z_hat_m.getView();
+        auto ox = omegaXProjected.getView();
+        auto oy = omegaYProjected.getView();
+        auto oz = omegaZProjected.getView();
 
         auto ux = ux_hat_m.getView();
         auto uy = uy_hat_m.getView();
@@ -343,10 +347,6 @@
 
                 const T k2 = kx * kx + ky * ky + kz * kz;
                 if (k2 == T(0)) {
-                    ox(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
-                    oy(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
-                    oz(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
-
                     ux(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
                     uy(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
                     uz(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
