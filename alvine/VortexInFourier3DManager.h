@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@ public:
     using ParticleContainer_t = ParticleContainer<T, Dim>;
     using FieldContainer_t    = FieldContainer<T, Dim>;
     using FieldSolver_t       = FieldSolver<T, Dim>;
+    using ComplexField_t      = typename AlvineManager<T, Dim>::ComplexField_t;
 
 private:
     int remesh_freq_m = 0;
@@ -84,6 +86,76 @@ public:
             RK4Step();
         } else {
             LeapFrogStep();
+        }
+    }
+
+    void runIsolatedRemeshRoundTripTest3D() {
+        if (this->spectral_filter_m != 0) {
+            throw std::runtime_error(
+                "VIF 3D remesh round-trip test requires --filter 0.");
+        }
+        if (this->viscosity_m != 0.0) {
+            throw std::runtime_error(
+                "VIF 3D remesh round-trip test requires --viscosity 0.");
+        }
+
+        this->spectralScatter3D(false);
+        this->computeSpectralVelocityModes3D();
+
+        auto omegaXBefore = this->omega_x_hat_m.deepCopy();
+        auto omegaYBefore = this->omega_y_hat_m.deepCopy();
+        auto omegaZBefore = this->omega_z_hat_m.deepCopy();
+
+        const double energyBefore = this->computeSpectralEnergy3D();
+        const double enstrophyBefore = this->computeSpectralEnstrophy3D();
+        const size_type particlesBefore = globalParticleCount3D();
+
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+
+        remeshParticlesFromGrid3D();
+
+        const double energyAfter = this->computeSpectralEnergy3D();
+        const double enstrophyAfter = this->computeSpectralEnstrophy3D();
+        const size_type particlesAfter = globalParticleCount3D();
+
+        const auto modeMetrics = computePhysicalVorticityModeMetrics3D(
+            omegaXBefore, omegaYBefore, omegaZBefore);
+
+        const double energyRelDelta =
+            (energyAfter - energyBefore) / std::max(std::abs(energyBefore), 1e-30);
+        const double enstrophyRelDelta =
+            (enstrophyAfter - enstrophyBefore) / std::max(std::abs(enstrophyBefore), 1e-30);
+        const double modeRelL2 =
+            std::sqrt(modeMetrics.diff2 / std::max(modeMetrics.before2, 1e-300));
+        const double projectionScale =
+            modeMetrics.dot / std::max(modeMetrics.before2, 1e-300);
+
+        if (ippl::Comm->rank() == 0) {
+            std::ofstream out(this->diagnosticFileName("remesh_roundtrip_3d.csv"),
+                              std::ios::out);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+            out << "method,dt,nx,ny,nz,np,energy_before,energy_after,energy_rel_delta,"
+                << "enstrophy_before,enstrophy_after,enstrophy_rel_delta,"
+                << "omega_mode_l2_before,omega_mode_l2_after,omega_mode_rel_l2_error,"
+                << "omega_mode_projection_scale,particles_before,particles_after\n";
+            out << this->method_m << "," << this->dt_m << ","
+                << this->nr_m[0] << "," << this->nr_m[1] << "," << this->nr_m[2] << ","
+                << this->np_m << ","
+                << energyBefore << "," << energyAfter << "," << energyRelDelta << ","
+                << enstrophyBefore << "," << enstrophyAfter << "," << enstrophyRelDelta << ","
+                << std::sqrt(modeMetrics.before2) << "," << std::sqrt(modeMetrics.after2)
+                << "," << modeRelL2 << "," << projectionScale << ","
+                << particlesBefore << "," << particlesAfter << "\n";
+
+            Inform m("vif3d_remesh_roundtrip ");
+            m << "energyRelDelta = " << energyRelDelta
+              << ", enstrophyRelDelta = " << enstrophyRelDelta
+              << ", omegaModeRelL2 = " << modeRelL2
+              << ", omegaModeProjectionScale = " << projectionScale
+              << ", particlesBefore = " << particlesBefore
+              << ", particlesAfter = " << particlesAfter << endl;
         }
     }
 
@@ -719,9 +791,117 @@ public:
     }
 
 private:
+    struct ModeRoundTripMetrics {
+        double before2 = 0.0;
+        double after2 = 0.0;
+        double diff2 = 0.0;
+        double dot = 0.0;
+    };
+
     bool shouldLogDiagnostics3D() const {
         return diagnostics_freq_m > 0
                && static_cast<int>(this->it_m) % diagnostics_freq_m == 0;
+    }
+
+    size_type globalParticleCount3D() const {
+        const size_type localParticles = this->pcontainer_m->getLocalNum();
+        size_type globalParticles = 0;
+        ippl::Comm->allreduce(localParticles, globalParticles, 1, std::plus<size_type>());
+        return globalParticles;
+    }
+
+    ModeRoundTripMetrics computePhysicalVorticityModeMetrics3D(
+        ComplexField_t& omegaXBefore,
+        ComplexField_t& omegaYBefore,
+        ComplexField_t& omegaZBefore) {
+        auto oxBefore = omegaXBefore.getView();
+        auto oyBefore = omegaYBefore.getView();
+        auto ozBefore = omegaZBefore.getView();
+        auto oxAfter = this->omega_x_hat_m.getView();
+        auto oyAfter = this->omega_y_hat_m.getView();
+        auto ozAfter = this->omega_z_hat_m.getView();
+
+        auto& layout = this->omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = this->omega_x_hat_m.getNghost();
+
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        double localBefore2 = 0.0;
+        double localAfter2 = 0.0;
+        double localDiff2 = 0.0;
+        double localDot = 0.0;
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_reduce(
+            "vif3d_remesh_roundtrip_mode_metrics",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(oxAfter.extent(0)) - nghost,
+                         static_cast<int>(oxAfter.extent(1)) - nghost,
+                         static_cast<int>(oxAfter.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k,
+                          double& before2, double& after2,
+                          double& diff2, double& dot) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                const auto bx = k2 * oxBefore(i, j, k);
+                const auto by = k2 * oyBefore(i, j, k);
+                const auto bz = k2 * ozBefore(i, j, k);
+                const auto ax = k2 * oxAfter(i, j, k);
+                const auto ay = k2 * oyAfter(i, j, k);
+                const auto az = k2 * ozAfter(i, j, k);
+
+                before2 += bx.real() * bx.real() + bx.imag() * bx.imag()
+                         + by.real() * by.real() + by.imag() * by.imag()
+                         + bz.real() * bz.real() + bz.imag() * bz.imag();
+                after2 += ax.real() * ax.real() + ax.imag() * ax.imag()
+                        + ay.real() * ay.real() + ay.imag() * ay.imag()
+                        + az.real() * az.real() + az.imag() * az.imag();
+
+                const auto dx = ax - bx;
+                const auto dy = ay - by;
+                const auto dz = az - bz;
+                diff2 += dx.real() * dx.real() + dx.imag() * dx.imag()
+                       + dy.real() * dy.real() + dy.imag() * dy.imag()
+                       + dz.real() * dz.real() + dz.imag() * dz.imag();
+
+                dot += ax.real() * bx.real() + ax.imag() * bx.imag()
+                     + ay.real() * by.real() + ay.imag() * by.imag()
+                     + az.real() * bz.real() + az.imag() * bz.imag();
+            },
+            Kokkos::Sum<double>(localBefore2),
+            Kokkos::Sum<double>(localAfter2),
+            Kokkos::Sum<double>(localDiff2),
+            Kokkos::Sum<double>(localDot));
+
+        ModeRoundTripMetrics metrics;
+        ippl::Comm->allreduce(localBefore2, metrics.before2, 1, std::plus<double>());
+        ippl::Comm->allreduce(localAfter2, metrics.after2, 1, std::plus<double>());
+        ippl::Comm->allreduce(localDiff2, metrics.diff2, 1, std::plus<double>());
+        ippl::Comm->allreduce(localDot, metrics.dot, 1, std::plus<double>());
+        return metrics;
     }
 
     void refreshSpectralVorticityModes3D(const bool consumeRemeshSkip) {
