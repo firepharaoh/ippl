@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
-                   "[--remesh-round-trip] [--overallocate value] [--info level]"
+                   "[--remesh-spectrum-dump] [--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
         }
@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
         std::string time_integrator = "leapfrog";
         int remesh_freq = 0;
         int diagnostics_freq = 1;
-        bool remesh_round_trip = false;
+        bool remesh_spectrum_dump = false;
         if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
             remesh_freq = std::atoi(argv[arg++]);
         }
@@ -82,8 +82,8 @@ int main(int argc, char* argv[]) {
                 std::transform(time_integrator.begin(), time_integrator.end(),
                                time_integrator.begin(),
                                [](unsigned char c) { return std::tolower(c); });
-            } else if (option == "--remesh-round-trip") {
-                remesh_round_trip = true;
+            } else if (option == "--remesh-spectrum-dump") {
+                remesh_spectrum_dump = true;
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
@@ -156,16 +156,6 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
-        if (remesh_round_trip && spectral_filter != 0) {
-            msg << "--remesh-round-trip requires --filter 0." << endl;
-            ippl::Comm->abort();
-        }
-
-        if (remesh_round_trip && viscosity != 0.0) {
-            msg << "--remesh-round-trip requires --viscosity 0." << endl;
-            ippl::Comm->abort();
-        }
-
         Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
@@ -180,7 +170,7 @@ int main(int argc, char* argv[]) {
             << " viscosity: " << viscosity
             << " Remesh frequency: " << remesh_freq
             << " Diagnostics frequency: " << diagnostics_freq
-            << " Remesh round-trip: " << (remesh_round_trip ? "true" : "false")
+            << " Remesh spectrum dump: " << (remesh_spectrum_dump ? "true" : "false")
             << " Time integrator: " << time_integrator << endl;
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
@@ -188,10 +178,9 @@ int main(int argc, char* argv[]) {
                                             rmin, rmax, origin, remesh_freq,
                                             diagnostics_freq);
         manager.pre_run();
-        if (remesh_round_trip) {
-            manager.runIsolatedRemeshRoundTripTest3D();
-        } else {
-            manager.run(manager.getNt());
+        manager.run(manager.getNt());
+        if (remesh_spectrum_dump) {
+            manager.dumpRemeshSpectrumDiagnostic3D();
         }
 
         IpplTimings::stopTimer(mainTimer);
