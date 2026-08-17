@@ -28,7 +28,8 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
-                   "[--rhs-consistency-time time] [--overallocate value] [--info level]"
+                   "[--rhs-consistency-time time] [--remesh-spectrum-dump] "
+                   "[--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
         }
@@ -53,6 +54,7 @@ int main(int argc, char* argv[]) {
         int remesh_freq = 0;
         int diagnostics_freq = 1;
         double rhs_consistency_time = -1.0;
+        bool remesh_spectrum_dump = false;
         if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
             remesh_freq = std::atoi(argv[arg++]);
         }
@@ -84,6 +86,8 @@ int main(int argc, char* argv[]) {
                 std::transform(time_integrator.begin(), time_integrator.end(),
                                time_integrator.begin(),
                                [](unsigned char c) { return std::tolower(c); });
+            } else if (option == "--remesh-spectrum-dump") {
+                remesh_spectrum_dump = true;
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
@@ -174,6 +178,7 @@ int main(int argc, char* argv[]) {
             << " Remesh frequency: " << remesh_freq
             << " Diagnostics frequency: " << diagnostics_freq
             << " RHS consistency time: " << rhs_consistency_time
+            << " Remesh spectrum dump: " << (remesh_spectrum_dump ? "true" : "false")
             << " Time integrator: " << time_integrator << endl;
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
@@ -181,6 +186,7 @@ int main(int argc, char* argv[]) {
                                             rmin, rmax, origin, remesh_freq,
                                             diagnostics_freq);
         manager.setRHSConsistencyTime(rhs_consistency_time);
+        manager.setSpectrumDump(remesh_spectrum_dump);
         manager.pre_run();
         manager.run(manager.getNt());
 

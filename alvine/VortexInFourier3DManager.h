@@ -36,6 +36,11 @@ public:
         double projectionScale = 0.0;
     };
 
+    struct SpectrumShellMetrics {
+        double enstrophy = 0.0;
+        std::uint64_t count = 0;
+    };
+
 private:
     int remesh_freq_m = 0;
     int diagnostics_freq_m = 1;
@@ -43,6 +48,10 @@ private:
     bool skip_next_rhs_filter_after_remesh_m = false;
     bool rhs_consistency_done_m = false;
     double rhs_consistency_time_m = -1.0;
+    bool spectrum_dump_m = false;
+    bool spectrum_shells_initialized_m = false;
+    bool spectrum_modes_initialized_m = false;
+    std::vector<double> spectrum_previous_shells_m;
     int last_remesh_step_m = -1;
 
 public:
@@ -92,6 +101,9 @@ public:
 
         initializeParticles();
         this->initNUFFT3D();
+        if (spectrum_dump_m) {
+            writeStepSpectrumDump3D();
+        }
     }
 
     void pre_step() override {
@@ -101,6 +113,9 @@ public:
     void post_step() override {
         AlvineManager<T, Dim>::post_step();
         maybeRunRHSConsistencyDiagnostic3D();
+        if (spectrum_dump_m) {
+            writeStepSpectrumDump3D();
+        }
     }
 
     void maybeRunRHSConsistencyDiagnostic3D() {
@@ -123,6 +138,235 @@ public:
     void setRHSConsistencyTime(const double time) {
         rhs_consistency_time_m = time;
         rhs_consistency_done_m = false;
+    }
+
+    void setSpectrumDump(const bool enabled) {
+        spectrum_dump_m = enabled;
+    }
+
+    void writeStepSpectrumDump3D() {
+        this->spectralScatter3D(false);
+        this->computeSpectralVelocityModes3D();
+        writeStepSpectrumShellDump3D();
+        writeStepSpectrumModeDump3D();
+    }
+
+    void writeStepSpectrumShellDump3D() {
+        auto localShells = computeCurrentVorticitySpectrumShellMetrics3D();
+
+        const int shellCount = static_cast<int>(localShells.size());
+        std::vector<double> localEnstrophy(shellCount);
+        std::vector<std::uint64_t> localCounts(shellCount);
+        std::vector<double> globalEnstrophy(shellCount);
+        std::vector<std::uint64_t> globalCounts(shellCount);
+
+        for (int shell = 0; shell < shellCount; ++shell) {
+            localEnstrophy[shell] = localShells[shell].enstrophy;
+            localCounts[shell] = localShells[shell].count;
+        }
+
+        ippl::Comm->allreduce(
+            localEnstrophy.data(), globalEnstrophy.data(), shellCount, std::plus<double>());
+        ippl::Comm->allreduce(
+            localCounts.data(), globalCounts.data(), shellCount, std::plus<std::uint64_t>());
+
+        if (ippl::Comm->rank() == 0) {
+            std::ofstream out(this->diagnosticFileName("remesh_spectrum_shells_3d.csv"),
+                              spectrum_shells_initialized_m ? std::ios::app : std::ios::out);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+            if (!spectrum_shells_initialized_m) {
+                out << "method,dt,step,time,viscosity,filter,is_remesh_step,k_shell,"
+                    << "enstrophy,ratio_to_previous_step,mode_count\n";
+            }
+
+            const bool isRemeshStep =
+                this->it_m > 0
+                && remesh_freq_m > 0
+                && static_cast<int>(this->it_m) % remesh_freq_m == 0;
+            for (int shell = 0; shell < shellCount; ++shell) {
+                double ratio = 0.0;
+                if (spectrum_shells_initialized_m
+                    && shell < static_cast<int>(spectrum_previous_shells_m.size())
+                    && spectrum_previous_shells_m[shell] > 1e-300) {
+                    ratio = globalEnstrophy[shell] / spectrum_previous_shells_m[shell];
+                }
+                out << this->method_m << "," << this->dt_m << ","
+                    << this->it_m << "," << this->time_m << ","
+                    << this->viscosity_m << "," << this->spectral_filter_m << ","
+                    << (isRemeshStep ? 1 : 0) << ","
+                    << shell << "," << globalEnstrophy[shell] << "," << ratio << ","
+                    << globalCounts[shell] << "\n";
+            }
+
+            spectrum_previous_shells_m = globalEnstrophy;
+        }
+        spectrum_shells_initialized_m = true;
+    }
+
+    void writeStepSpectrumModeDump3D() {
+        auto oxHost = this->omega_x_hat_m.getHostMirror();
+        auto oyHost = this->omega_y_hat_m.getHostMirror();
+        auto ozHost = this->omega_z_hat_m.getHostMirror();
+        Kokkos::deep_copy(oxHost, this->omega_x_hat_m.getView());
+        Kokkos::deep_copy(oyHost, this->omega_y_hat_m.getView());
+        Kokkos::deep_copy(ozHost, this->omega_z_hat_m.getView());
+
+        auto& layout = this->omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = this->omega_x_hat_m.getNghost();
+
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        const std::string filename =
+            this->diagnosticFileName("remesh_spectrum_modes_3d_rank_")
+            + std::to_string(ippl::Comm->rank()) + ".csv";
+        std::ofstream out(filename, spectrum_modes_initialized_m ? std::ios::app : std::ios::out);
+        out.precision(16);
+        out.setf(std::ios::scientific, std::ios::floatfield);
+        if (!spectrum_modes_initialized_m) {
+            out << "method,dt,step,time,viscosity,filter,is_remesh_step,"
+                << "kx,ky,kz,k_mag,omega_amp,enstrophy_density\n";
+        }
+
+        const bool isRemeshStep =
+            this->it_m > 0
+            && remesh_freq_m > 0
+            && static_cast<int>(this->it_m) % remesh_freq_m == 0;
+        for (int i = nghost; i < static_cast<int>(oxHost.extent(0)) - nghost; ++i) {
+            for (int j = nghost; j < static_cast<int>(oxHost.extent(1)) - nghost; ++j) {
+                for (int k = nghost; k < static_cast<int>(oxHost.extent(2)) - nghost; ++k) {
+                    const int gx = i - nghost + lDom[0].first();
+                    const int gy = j - nghost + lDom[1].first();
+                    const int gz = k - nghost + lDom[2].first();
+
+                    const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                    const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                    const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                    const bool notMidX = (gx != Nx / 2);
+                    const bool notMidY = (gy != Ny / 2);
+                    const bool notMidZ = (gz != Nz / 2);
+
+                    const T kx = notMidX * twoPi * mx / Lx;
+                    const T ky = notMidY * twoPi * my / Ly;
+                    const T kz = notMidZ * twoPi * mz / Lz;
+                    const T k2 = kx * kx + ky * ky + kz * kz;
+
+                    const auto wx = k2 * oxHost(i, j, k);
+                    const auto wy = k2 * oyHost(i, j, k);
+                    const auto wz = k2 * ozHost(i, j, k);
+
+                    const double omegaAmp =
+                        wx.real() * wx.real() + wx.imag() * wx.imag()
+                        + wy.real() * wy.real() + wy.imag() * wy.imag()
+                        + wz.real() * wz.real() + wz.imag() * wz.imag();
+                    const double kmag = std::sqrt(static_cast<double>(mx) * mx
+                                                  + static_cast<double>(my) * my
+                                                  + static_cast<double>(mz) * mz);
+                    const double enstrophyDensity = 0.5 * volume * omegaAmp;
+
+                    out << this->method_m << "," << this->dt_m << ","
+                        << this->it_m << "," << this->time_m << ","
+                        << this->viscosity_m << "," << this->spectral_filter_m << ","
+                        << (isRemeshStep ? 1 : 0) << ","
+                        << mx << "," << my << "," << mz << "," << kmag << ","
+                        << omegaAmp << "," << enstrophyDensity << "\n";
+                }
+            }
+        }
+
+        spectrum_modes_initialized_m = true;
+    }
+
+    std::vector<SpectrumShellMetrics> computeCurrentVorticitySpectrumShellMetrics3D() {
+        auto ox = this->omega_x_hat_m.getView();
+        auto oy = this->omega_y_hat_m.getView();
+        auto oz = this->omega_z_hat_m.getView();
+
+        auto& layout = this->omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = this->omega_x_hat_m.getNghost();
+
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const int maxShell = static_cast<int>(std::floor(std::sqrt(
+            static_cast<double>(Nx / 2) * static_cast<double>(Nx / 2)
+            + static_cast<double>(Ny / 2) * static_cast<double>(Ny / 2)
+            + static_cast<double>(Nz / 2) * static_cast<double>(Nz / 2))));
+        const int shellCount = maxShell + 1;
+
+        Kokkos::View<double*> shellEnstrophy("vif3d_step_shell_enstrophy", shellCount);
+        Kokkos::View<std::uint64_t*> shellCounts("vif3d_step_shell_counts", shellCount);
+        Kokkos::deep_copy(shellEnstrophy, 0.0);
+        Kokkos::deep_copy(shellCounts, std::uint64_t(0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "vif3d_spectrum_shell_metrics",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                const auto wx = k2 * ox(i, j, k);
+                const auto wy = k2 * oy(i, j, k);
+                const auto wz = k2 * oz(i, j, k);
+
+                const double omegaAmp =
+                    wx.real() * wx.real() + wx.imag() * wx.imag()
+                    + wy.real() * wy.real() + wy.imag() * wy.imag()
+                    + wz.real() * wz.real() + wz.imag() * wz.imag();
+                const T radius2 = T(mx) * T(mx) + T(my) * T(my) + T(mz) * T(mz);
+                const int shell = static_cast<int>(Kokkos::floor(Kokkos::sqrt(radius2)));
+
+                Kokkos::atomic_add(&shellEnstrophy(shell), 0.5 * volume * omegaAmp);
+                Kokkos::atomic_add(&shellCounts(shell), std::uint64_t(1));
+            });
+        Kokkos::fence();
+
+        auto hostEnstrophy =
+            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellEnstrophy);
+        auto hostCounts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellCounts);
+
+        std::vector<SpectrumShellMetrics> shells(shellCount);
+        for (int shell = 0; shell < shellCount; ++shell) {
+            shells[shell].enstrophy = hostEnstrophy(shell);
+            shells[shell].count = hostCounts(shell);
+        }
+        return shells;
     }
 
     void runRHSConsistencyDiagnostic3D(
