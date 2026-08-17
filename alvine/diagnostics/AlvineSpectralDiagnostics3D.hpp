@@ -56,80 +56,6 @@
         return computeSpectralEnergy3D();
     }
 
-    double computeSpectralEnergyFromVorticity3D() {
-        auto ox = omega_x_hat_m.getView();
-        auto oy = omega_y_hat_m.getView();
-        auto oz = omega_z_hat_m.getView();
-
-        auto& layout       = omega_x_hat_m.getLayout();
-        auto& mesh         = omega_x_hat_m.get_mesh();
-        const auto& lDom   = layout.getLocalNDIndex();
-        const auto& domain = layout.getDomain();
-        const auto& dx     = mesh.getMeshSpacing();
-        const int nghost   = omega_x_hat_m.getNghost();
-
-        const int Nx = domain[0].length();
-        const int Ny = domain[1].length();
-        const int Nz = domain[2].length();
-
-        const T Lx     = dx[0] * Nx;
-        const T Ly     = dx[1] * Ny;
-        const T Lz     = dx[2] * Nz;
-        const T volume = Lx * Ly * Lz;
-        const T twoPi  = T(2.0 * std::acos(-1.0));
-
-        double localEnergy = 0.0;
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_reduce(
-            "compute_spectral_energy_from_vorticity_3d",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(ox.extent(0)) - nghost,
-                         static_cast<int>(ox.extent(1)) - nghost,
-                         static_cast<int>(ox.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k, double& lsum) {
-                const int gx = i - nghost + lDom[0].first();
-                const int gy = j - nghost + lDom[1].first();
-                const int gz = k - nghost + lDom[2].first();
-
-                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
-
-                const bool notMidX = (gx != Nx / 2);
-                const bool notMidY = (gy != Ny / 2);
-                const bool notMidZ = (gz != Nz / 2);
-
-                const T kx = notMidX * twoPi * mx / Lx;
-                const T ky = notMidY * twoPi * my / Ly;
-                const T kz = notMidZ * twoPi * mz / Lz;
-                const T k2 = kx * kx + ky * ky + kz * kz;
-
-                if (k2 > T(0.0)) {
-                    const auto oxMode = ox(i, j, k);
-                    const auto oyMode = oy(i, j, k);
-                    const auto ozMode = oz(i, j, k);
-
-                    const double oxStored2 = oxMode.real() * oxMode.real()
-                                           + oxMode.imag() * oxMode.imag();
-                    const double oyStored2 = oyMode.real() * oyMode.real()
-                                           + oyMode.imag() * oyMode.imag();
-                    const double ozStored2 = ozMode.real() * ozMode.real()
-                                           + ozMode.imag() * ozMode.imag();
-
-                    lsum += k2 * (oxStored2 + oyStored2 + ozStored2);
-                }
-            },
-            localEnergy);
-
-        double globalEnergy = 0.0;
-        ippl::Comm->allreduce(localEnergy, globalEnergy, 1, std::plus<double>());
-
-        // For divergence-free velocity, |omega_hat|^2 = |k|^2 |u_hat|^2.
-        // omega_*_hat_m stores omega_hat / |k|^2, so |omega_hat|^2 / |k|^2
-        // becomes |k|^2 * |omega_*_hat_m|^2.
-        return T(0.5) * volume * globalEnergy;
-    }
-
     double computeSpectralEnstrophy3D() {
         auto ox = omega_x_hat_m.getView();
         auto oy = omega_y_hat_m.getView();
@@ -619,7 +545,6 @@
     void logSpectralDiagnostics3D(
         const std::string& filename = "spectral_diagnostics_3d.csv") {
         const double energy = computeSpectralEnergy3D();
-        const double energyFromVorticity = computeSpectralEnergyFromVorticity3D();
         const double enstrophy = computeSpectralEnstrophy3D();
         const double divergenceL2 = computeSpectralDivergenceL23D();
         const double vorticityDivergenceL2 = computeSpectralVorticityDivergenceL23D();
@@ -637,9 +562,6 @@
         const double exactEnstrophy = 3.0 * pi * pi * pi;
         const double energyRelError =
             std::abs(energy - exactEnergy) / std::max(exactEnergy, 1e-30);
-        const double energyVorticityDifference = energy - energyFromVorticity;
-        const double energyVorticityRelDifference =
-            std::abs(energyVorticityDifference) / std::max(std::abs(energy), 1e-30);
         const double enstrophyRelError =
             std::abs(enstrophy - exactEnstrophy) / std::max(exactEnstrophy, 1e-30);
         const double energyDissipationRate =
@@ -683,9 +605,6 @@
 
             if (firstWrite) {
                 out << "method,dt,step,time,spectral_energy,spectral_energy_rel_error,"
-                    << "spectral_energy_from_vorticity,"
-                    << "spectral_energy_vorticity_difference,"
-                    << "spectral_energy_vorticity_rel_difference,"
                     << "spectral_enstrophy,spectral_enstrophy_rel_error,"
                     << "spectral_energy_dissipation_rate,"
                     << "spectral_cumulative_energy_dissipation,"
@@ -702,9 +621,6 @@
 
             out << method_m << "," << dt_m << "," << it_m << "," << time_m << ","
                 << energy << "," << energyRelError << ","
-                << energyFromVorticity << ","
-                << energyVorticityDifference << ","
-                << energyVorticityRelDifference << ","
                 << enstrophy << "," << enstrophyRelError << ","
                 << energyDissipationRate << ","
                 << spectral_3d_cumulative_energy_dissipation_m << ","
@@ -720,9 +636,6 @@
             Inform m("spectral_diagnostics_3d ");
             m << "energy = " << energy
               << ", energyRelError = " << energyRelError
-              << ", energyFromVorticity = " << energyFromVorticity
-              << ", energyVorticityRelDifference = "
-              << energyVorticityRelDifference
               << ", enstrophy = " << enstrophy
               << ", enstrophyRelError = " << enstrophyRelError
               << ", energyDissipationRate = " << energyDissipationRate

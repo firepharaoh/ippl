@@ -26,10 +26,14 @@ public:
     using FieldContainer_t    = FieldContainer<T, Dim>;
     using FieldSolver_t       = FieldSolver<T, Dim>;
     using ComplexField_t      = typename AlvineManager<T, Dim>::ComplexField_t;
+    using VectorField_t       = ::VField_t<T, Dim>;
 
-    struct RemeshSpectrumShellMetrics {
-        double enstrophy = 0.0;
-        std::uint64_t count = 0;
+    struct RHSConsistencyMetrics {
+        double particleL2 = 0.0;
+        double referenceL2 = 0.0;
+        double errorL2 = 0.0;
+        double relativeL2 = 0.0;
+        double projectionScale = 0.0;
     };
 
 private:
@@ -37,9 +41,8 @@ private:
     int diagnostics_freq_m = 1;
     bool bootstrap_next_push_m = false;
     bool skip_next_rhs_filter_after_remesh_m = false;
-    bool remesh_spectrum_dump_m = false;
-    bool remesh_spectrum_shells_initialized_m = false;
-    std::vector<double> remesh_spectrum_previous_shells_m;
+    bool rhs_consistency_done_m = false;
+    double rhs_consistency_time_m = -1.0;
     int last_remesh_step_m = -1;
 
 public:
@@ -89,8 +92,23 @@ public:
 
         initializeParticles();
         this->initNUFFT3D();
-        if (remesh_spectrum_dump_m) {
-            writeStepSpectrumShellDump3D();
+    }
+
+    void pre_step() override {
+        maybeRunRHSConsistencyDiagnostic3D();
+    }
+
+    void post_step() override {
+        AlvineManager<T, Dim>::post_step();
+        maybeRunRHSConsistencyDiagnostic3D();
+    }
+
+    void maybeRunRHSConsistencyDiagnostic3D() {
+        if (!rhs_consistency_done_m
+            && rhs_consistency_time_m >= 0.0
+            && this->time_m + 1e-12 >= rhs_consistency_time_m) {
+            runRHSConsistencyDiagnostic3D();
+            rhs_consistency_done_m = true;
         }
     }
 
@@ -102,154 +120,340 @@ public:
         }
     }
 
-    void setRemeshSpectrumDump(const bool enabled) {
-        remesh_spectrum_dump_m = enabled;
+    void setRHSConsistencyTime(const double time) {
+        rhs_consistency_time_m = time;
+        rhs_consistency_done_m = false;
     }
 
-    void post_step() override {
-        AlvineManager<T, Dim>::post_step();
-        if (remesh_spectrum_dump_m) {
-            writeStepSpectrumShellDump3D();
-        }
-    }
-
-    void writeStepSpectrumShellDump3D() {
-        this->spectralScatter3D(false);
+    void runRHSConsistencyDiagnostic3D(
+        const std::string& filename = "rhs_consistency_3d.csv") {
+        refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->computeSpectralVelocityGradientModes3D();
 
-        auto localShells = computeCurrentVorticitySpectrumShellMetrics3D();
-
-        const int shellCount = static_cast<int>(localShells.size());
-        std::vector<double> localEnstrophy(shellCount);
-        std::vector<std::uint64_t> localCounts(shellCount);
-        std::vector<double> globalEnstrophy(shellCount);
-        std::vector<std::uint64_t> globalCounts(shellCount);
-
-        for (int shell = 0; shell < shellCount; ++shell) {
-            localEnstrophy[shell] = localShells[shell].enstrophy;
-            localCounts[shell] = localShells[shell].count;
+        this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        if (this->viscosity_m > 0.0) {
+            this->computeSpectralViscosityModes3D();
         }
 
-        ippl::Comm->allreduce(
-            localEnstrophy.data(), globalEnstrophy.data(), shellCount, std::plus<double>());
-        ippl::Comm->allreduce(
-            localCounts.data(), globalCounts.data(), shellCount, std::plus<std::uint64_t>());
+        auto omegaXState = this->omega_x_hat_m.deepCopy();
+        auto omegaYState = this->omega_y_hat_m.deepCopy();
+        auto omegaZState = this->omega_z_hat_m.deepCopy();
+        auto uxState = this->ux_hat_m.deepCopy();
+        auto uyState = this->uy_hat_m.deepCopy();
+        auto uzState = this->uz_hat_m.deepCopy();
+        auto viscXState = this->viscosity_x_hat_m.deepCopy();
+        auto viscYState = this->viscosity_y_hat_m.deepCopy();
+        auto viscZState = this->viscosity_z_hat_m.deepCopy();
+
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+
+        auto sReference = this->fcontainer_m->getOmegaField().deepCopy();
+        auto vReference = this->fcontainer_m->getOmegaField().deepCopy();
+        computeGridRHSReference3D(sReference, vReference);
+
+        this->spectralGatherGradientModes3D();
+        if (this->viscosity_m > 0.0) {
+            this->spectralGatherViscosity3D();
+        }
+
+        auto sParticle = this->fcontainer_m->getOmegaField().deepCopy();
+        auto vParticle = this->fcontainer_m->getOmegaField().deepCopy();
+        computeParticleRHSField3D(sParticle, true, false);
+        computeParticleRHSField3D(vParticle, false, true);
+
+        auto totalReference = sReference.deepCopy();
+        auto totalParticle = sParticle.deepCopy();
+        addRHSFields3D(totalReference, sReference, vReference);
+        addRHSFields3D(totalParticle, sParticle, vParticle);
+
+        const RHSConsistencyMetrics sMetrics =
+            computeRHSFieldMetrics3D(sParticle, sReference);
+        const RHSConsistencyMetrics vMetrics =
+            computeRHSFieldMetrics3D(vParticle, vReference);
+        const RHSConsistencyMetrics totalMetrics =
+            computeRHSFieldMetrics3D(totalParticle, totalReference);
+
+        Kokkos::deep_copy(this->omega_x_hat_m.getView(), omegaXState.getView());
+        Kokkos::deep_copy(this->omega_y_hat_m.getView(), omegaYState.getView());
+        Kokkos::deep_copy(this->omega_z_hat_m.getView(), omegaZState.getView());
+        Kokkos::deep_copy(this->ux_hat_m.getView(), uxState.getView());
+        Kokkos::deep_copy(this->uy_hat_m.getView(), uyState.getView());
+        Kokkos::deep_copy(this->uz_hat_m.getView(), uzState.getView());
+        Kokkos::deep_copy(this->viscosity_x_hat_m.getView(), viscXState.getView());
+        Kokkos::deep_copy(this->viscosity_y_hat_m.getView(), viscYState.getView());
+        Kokkos::deep_copy(this->viscosity_z_hat_m.getView(), viscZState.getView());
 
         if (ippl::Comm->rank() == 0) {
-            std::ofstream out(this->diagnosticFileName("remesh_spectrum_shells_3d.csv"),
-                              remesh_spectrum_shells_initialized_m
-                                  ? std::ios::app : std::ios::out);
+            std::ofstream out(this->diagnosticFileName(filename), std::ios::out);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
-            if (!remesh_spectrum_shells_initialized_m) {
-                out << "method,dt,step,time,viscosity,filter,is_remesh_step,k_shell,"
-                    << "enstrophy,ratio_to_previous_step,mode_count\n";
-            }
+            out << "method,dt,step,time,target_time,viscosity,filter,term,"
+                << "particle_l2,reference_l2,error_l2,relative_l2,projection_scale\n";
+            writeRHSConsistencyRow3D(out, "stretching", sMetrics);
+            writeRHSConsistencyRow3D(out, "viscosity", vMetrics);
+            writeRHSConsistencyRow3D(out, "total", totalMetrics);
 
-            const bool isRemeshStep =
-                this->it_m > 0
-                && remesh_freq_m > 0
-                && static_cast<int>(this->it_m) % remesh_freq_m == 0;
-            for (int shell = 0; shell < shellCount; ++shell) {
-                double ratio = 0.0;
-                if (remesh_spectrum_shells_initialized_m
-                    && shell < static_cast<int>(remesh_spectrum_previous_shells_m.size())
-                    && remesh_spectrum_previous_shells_m[shell] > 1e-300) {
-                    ratio = globalEnstrophy[shell] / remesh_spectrum_previous_shells_m[shell];
-                }
-                out << this->method_m << "," << this->dt_m << ","
-                    << this->it_m << "," << this->time_m << ","
-                    << this->viscosity_m << "," << this->spectral_filter_m << ","
-                    << (isRemeshStep ? 1 : 0) << ","
-                    << shell << "," << globalEnstrophy[shell] << "," << ratio << ","
-                    << globalCounts[shell] << "\n";
-            }
-
-            remesh_spectrum_previous_shells_m = globalEnstrophy;
+            Inform m("rhs_consistency_3d ");
+            m << "step = " << this->it_m
+              << ", time = " << this->time_m
+              << ", stretchingRelL2 = " << sMetrics.relativeL2
+              << ", viscosityRelL2 = " << vMetrics.relativeL2
+              << ", totalRelL2 = " << totalMetrics.relativeL2 << endl;
         }
-        remesh_spectrum_shells_initialized_m = true;
     }
 
-    std::vector<RemeshSpectrumShellMetrics> computeCurrentVorticitySpectrumShellMetrics3D() {
-        auto ox = this->omega_x_hat_m.getView();
-        auto oy = this->omega_y_hat_m.getView();
-        auto oz = this->omega_z_hat_m.getView();
+    void writeRHSConsistencyRow3D(std::ofstream& out,
+                                  const std::string& term,
+                                  const RHSConsistencyMetrics& metrics) {
+        out << this->method_m << "," << this->dt_m << ","
+            << this->it_m << "," << this->time_m << ","
+            << rhs_consistency_time_m << "," << this->viscosity_m << ","
+            << this->spectral_filter_m << "," << term << ","
+            << metrics.particleL2 << "," << metrics.referenceL2 << ","
+            << metrics.errorL2 << "," << metrics.relativeL2 << ","
+            << metrics.projectionScale << "\n";
+    }
 
-        auto& layout = this->omega_x_hat_m.getLayout();
-        const auto& lDom = layout.getLocalNDIndex();
-        const int nghost = this->omega_x_hat_m.getNghost();
+    void inverseCellCenteredModes3D(ComplexField_t& modes) {
+        this->applyCellCenteredIfftPhase3D(modes);
+        this->spectralFft_mp->transform(ippl::BACKWARD, modes);
+    }
 
-        const int Nx = this->nr_m[0];
-        const int Ny = this->nr_m[1];
-        const int Nz = this->nr_m[2];
+    void computeGridRHSReference3D(VectorField_t& sReference,
+                                   VectorField_t& vReference) {
+        auto duxdxModes = this->duxdx_hat_m.deepCopy();
+        auto duxdyModes = this->duxdy_hat_m.deepCopy();
+        auto duxdzModes = this->duxdz_hat_m.deepCopy();
+        auto duydxModes = this->duydx_hat_m.deepCopy();
+        auto duydyModes = this->duydy_hat_m.deepCopy();
+        auto duydzModes = this->duydz_hat_m.deepCopy();
+        auto duzdxModes = this->duzdx_hat_m.deepCopy();
+        auto duzdyModes = this->duzdy_hat_m.deepCopy();
+        auto duzdzModes = this->duzdz_hat_m.deepCopy();
+        auto viscXModes = this->viscosity_x_hat_m.deepCopy();
+        auto viscYModes = this->viscosity_y_hat_m.deepCopy();
+        auto viscZModes = this->viscosity_z_hat_m.deepCopy();
 
-        const T Lx = this->rmax_m[0] - this->rmin_m[0];
-        const T Ly = this->rmax_m[1] - this->rmin_m[1];
-        const T Lz = this->rmax_m[2] - this->rmin_m[2];
-        const T volume = Lx * Ly * Lz;
-        const T twoPi = T(2.0 * std::acos(-1.0));
-        const int maxShell = static_cast<int>(std::floor(std::sqrt(
-            static_cast<double>(Nx / 2) * static_cast<double>(Nx / 2)
-            + static_cast<double>(Ny / 2) * static_cast<double>(Ny / 2)
-            + static_cast<double>(Nz / 2) * static_cast<double>(Nz / 2))));
-        const int shellCount = maxShell + 1;
+        inverseCellCenteredModes3D(duxdxModes);
+        inverseCellCenteredModes3D(duxdyModes);
+        inverseCellCenteredModes3D(duxdzModes);
+        inverseCellCenteredModes3D(duydxModes);
+        inverseCellCenteredModes3D(duydyModes);
+        inverseCellCenteredModes3D(duydzModes);
+        inverseCellCenteredModes3D(duzdxModes);
+        inverseCellCenteredModes3D(duzdyModes);
+        inverseCellCenteredModes3D(duzdzModes);
+        inverseCellCenteredModes3D(viscXModes);
+        inverseCellCenteredModes3D(viscYModes);
+        inverseCellCenteredModes3D(viscZModes);
 
-        Kokkos::View<double*> shellEnstrophy("vif3d_step_shell_enstrophy", shellCount);
-        Kokkos::View<std::uint64_t*> shellCounts("vif3d_remesh_shell_counts", shellCount);
-        Kokkos::deep_copy(shellEnstrophy, 0.0);
-        Kokkos::deep_copy(shellCounts, std::uint64_t(0));
+        auto omega = this->fcontainer_m->getOmegaField().getView();
+        auto sRef = sReference.getView();
+        auto vRef = vReference.getView();
+        auto duxdx = duxdxModes.getView();
+        auto duxdy = duxdyModes.getView();
+        auto duxdz = duxdzModes.getView();
+        auto duydx = duydxModes.getView();
+        auto duydy = duydyModes.getView();
+        auto duydz = duydzModes.getView();
+        auto duzdx = duzdxModes.getView();
+        auto duzdy = duzdyModes.getView();
+        auto duzdz = duzdzModes.getView();
+        auto viscX = viscXModes.getView();
+        auto viscY = viscYModes.getView();
+        auto viscZ = viscZModes.getView();
+        const int nghost = sReference.getNghost();
 
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
         Kokkos::parallel_for(
-            "vif3d_remesh_spectrum_shell_metrics",
+            "compute_grid_rhs_reference_3d",
             policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(ox.extent(0)) - nghost,
-                         static_cast<int>(ox.extent(1)) - nghost,
-                         static_cast<int>(ox.extent(2)) - nghost}),
+                        {static_cast<int>(sRef.extent(0)) - nghost,
+                         static_cast<int>(sRef.extent(1)) - nghost,
+                         static_cast<int>(sRef.extent(2)) - nghost}),
             KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                const int gx = i - nghost + lDom[0].first();
-                const int gy = j - nghost + lDom[1].first();
-                const int gz = k - nghost + lDom[2].first();
+                const T omegaX = omega(i, j, k)[0];
+                const T omegaY = omega(i, j, k)[1];
+                const T omegaZ = omega(i, j, k)[2];
 
-                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+                sRef(i, j, k)[0] =
+                    omegaX * duxdx(i, j, k).real()
+                    + omegaY * duxdy(i, j, k).real()
+                    + omegaZ * duxdz(i, j, k).real();
+                sRef(i, j, k)[1] =
+                    omegaX * duydx(i, j, k).real()
+                    + omegaY * duydy(i, j, k).real()
+                    + omegaZ * duydz(i, j, k).real();
+                sRef(i, j, k)[2] =
+                    omegaX * duzdx(i, j, k).real()
+                    + omegaY * duzdy(i, j, k).real()
+                    + omegaZ * duzdz(i, j, k).real();
 
-                const bool notMidX = (gx != Nx / 2);
-                const bool notMidY = (gy != Ny / 2);
-                const bool notMidZ = (gz != Nz / 2);
+                vRef(i, j, k)[0] = viscX(i, j, k).real();
+                vRef(i, j, k)[1] = viscY(i, j, k).real();
+                vRef(i, j, k)[2] = viscZ(i, j, k).real();
+            });
+        Kokkos::fence();
+    }
 
-                const T kx = notMidX * twoPi * mx / Lx;
-                const T ky = notMidY * twoPi * my / Ly;
-                const T kz = notMidZ * twoPi * mz / Lz;
-                const T k2 = kx * kx + ky * ky + kz * kz;
+    void computeParticleRHSField3D(VectorField_t& rhsField,
+                                   const bool includeStretching,
+                                   const bool includeViscosity) {
+        auto& pc = *this->pcontainer_m;
+        const auto n = pc.getLocalNum();
+        auto omega = pc.omega.getView();
+        auto omegaX = pc.omega_x.getView();
+        auto omegaY = pc.omega_y.getView();
+        auto omegaZ = pc.omega_z.getView();
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
+        auto viscosity = pc.viscosity.getView();
 
-                const auto wx = k2 * ox(i, j, k);
-                const auto wy = k2 * oy(i, j, k);
-                const auto wz = k2 * oz(i, j, k);
+        Kokkos::View<Vector_t<T, Dim>*> omegaBackup("rhs_consistency_omega_backup", n);
+        const bool useViscosity = includeViscosity && this->viscosity_m > 0.0;
+        const unsigned nxp = particlesPerDirection3D();
+        const T particleVolume =
+            T(this->rmax_m[0] - this->rmin_m[0])
+            * T(this->rmax_m[1] - this->rmin_m[1])
+            * T(this->rmax_m[2] - this->rmin_m[2])
+            / T(nxp * nxp * nxp);
 
-                const double amplitude =
-                    wx.real() * wx.real() + wx.imag() * wx.imag()
-                    + wy.real() * wy.real() + wy.imag() * wy.imag()
-                    + wz.real() * wz.real() + wz.imag() * wz.imag();
-                const T radius2 = T(mx) * T(mx) + T(my) * T(my) + T(mz) * T(mz);
-                const int shell = static_cast<int>(Kokkos::floor(Kokkos::sqrt(radius2)));
+        Kokkos::parallel_for(
+            "pack_particle_rhs_for_scatter_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                omegaBackup(p) = omega(p);
 
-                Kokkos::atomic_add(&shellEnstrophy(shell), 0.5 * volume * amplitude);
-                Kokkos::atomic_add(&shellCounts(shell), std::uint64_t(1));
+                Vector_t<T, Dim> rhs(0.0);
+                if (includeStretching) {
+                    const T omegaPX = omega(p)[0];
+                    const T omegaPY = omega(p)[1];
+                    const T omegaPZ = omega(p)[2];
+                    rhs[0] += omegaPX * duxdx(p) + omegaPY * duxdy(p) + omegaPZ * duxdz(p);
+                    rhs[1] += omegaPX * duydx(p) + omegaPY * duydy(p) + omegaPZ * duydz(p);
+                    rhs[2] += omegaPX * duzdx(p) + omegaPY * duzdy(p) + omegaPZ * duzdz(p);
+                }
+                if (useViscosity) {
+                    rhs[0] += viscosity(p)[0] * particleVolume;
+                    rhs[1] += viscosity(p)[1] * particleVolume;
+                    rhs[2] += viscosity(p)[2] * particleVolume;
+                }
+
+                omega(p) = rhs;
+                omegaX(p) = rhs[0];
+                omegaY(p) = rhs[1];
+                omegaZ(p) = rhs[2];
             });
         Kokkos::fence();
 
-        auto hostEnstrophy =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellEnstrophy);
-        auto hostCounts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellCounts);
+        this->spectralScatter3D(false);
+        this->reconstructSpectralVorticity(rhsField);
 
-        std::vector<RemeshSpectrumShellMetrics> shells(shellCount);
-        for (int shell = 0; shell < shellCount; ++shell) {
-            shells[shell].enstrophy = hostEnstrophy(shell);
-            shells[shell].count = hostCounts(shell);
-        }
-        return shells;
+        Kokkos::parallel_for(
+            "restore_particle_omega_after_rhs_consistency_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                omega(p) = omegaBackup(p);
+                omegaX(p) = omegaBackup(p)[0];
+                omegaY(p) = omegaBackup(p)[1];
+                omegaZ(p) = omegaBackup(p)[2];
+            });
+        Kokkos::fence();
+    }
+
+    void addRHSFields3D(VectorField_t& outField,
+                        VectorField_t& lhsField,
+                        VectorField_t& rhsField) {
+        auto out = outField.getView();
+        auto lhs = lhsField.getView();
+        auto rhs = rhsField.getView();
+        const int nghost = outField.getNghost();
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "add_rhs_fields_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(out.extent(0)) - nghost,
+                         static_cast<int>(out.extent(1)) - nghost,
+                         static_cast<int>(out.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                for (unsigned d = 0; d < Dim; ++d) {
+                    out(i, j, k)[d] = lhs(i, j, k)[d] + rhs(i, j, k)[d];
+                }
+            });
+        Kokkos::fence();
+    }
+
+    RHSConsistencyMetrics computeRHSFieldMetrics3D(VectorField_t& particleField,
+                                                   VectorField_t& referenceField) {
+        auto particle = particleField.getView();
+        auto reference = referenceField.getView();
+        const int nghost = particleField.getNghost();
+        const T cellVolume = this->hr_m[0] * this->hr_m[1] * this->hr_m[2];
+
+        double localParticle2 = 0.0;
+        double localReference2 = 0.0;
+        double localError2 = 0.0;
+        double localDot = 0.0;
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_reduce(
+            "compute_rhs_consistency_metrics_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(particle.extent(0)) - nghost,
+                         static_cast<int>(particle.extent(1)) - nghost,
+                         static_cast<int>(particle.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k,
+                          double& particle2,
+                          double& reference2,
+                          double& error2,
+                          double& dot) {
+                for (unsigned d = 0; d < Dim; ++d) {
+                    const double p = particle(i, j, k)[d];
+                    const double r = reference(i, j, k)[d];
+                    const double e = p - r;
+                    particle2 += cellVolume * p * p;
+                    reference2 += cellVolume * r * r;
+                    error2 += cellVolume * e * e;
+                    dot += cellVolume * p * r;
+                }
+            },
+            Kokkos::Sum<double>(localParticle2),
+            Kokkos::Sum<double>(localReference2),
+            Kokkos::Sum<double>(localError2),
+            Kokkos::Sum<double>(localDot));
+
+        double globalParticle2 = 0.0;
+        double globalReference2 = 0.0;
+        double globalError2 = 0.0;
+        double globalDot = 0.0;
+        ippl::Comm->allreduce(localParticle2, globalParticle2, 1, std::plus<double>());
+        ippl::Comm->allreduce(localReference2, globalReference2, 1, std::plus<double>());
+        ippl::Comm->allreduce(localError2, globalError2, 1, std::plus<double>());
+        ippl::Comm->allreduce(localDot, globalDot, 1, std::plus<double>());
+
+        RHSConsistencyMetrics metrics;
+        metrics.particleL2 = std::sqrt(std::max(globalParticle2, 0.0));
+        metrics.referenceL2 = std::sqrt(std::max(globalReference2, 0.0));
+        metrics.errorL2 = std::sqrt(std::max(globalError2, 0.0));
+        metrics.relativeL2 =
+            metrics.errorL2 / std::max(metrics.referenceL2, 1e-300);
+        metrics.projectionScale =
+            globalDot / std::max(globalReference2, 1e-300);
+        return metrics;
     }
 
     void remeshParticles3D() {
