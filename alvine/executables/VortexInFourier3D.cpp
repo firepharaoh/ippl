@@ -177,11 +177,9 @@ int main(int argc, char* argv[]) {
                                             spectral_filter, viscosity, time_integrator,
                                             rmin, rmax, origin, remesh_freq,
                                             diagnostics_freq);
+        manager.setRemeshSpectrumDump(remesh_spectrum_dump);
         manager.pre_run();
         manager.run(manager.getNt());
-        if (remesh_spectrum_dump) {
-            manager.dumpRemeshSpectrumDiagnostic3D();
-        }
 
         IpplTimings::stopTimer(mainTimer);
         IpplTimings::print();

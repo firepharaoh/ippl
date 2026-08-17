@@ -28,8 +28,7 @@ public:
     using ComplexField_t      = typename AlvineManager<T, Dim>::ComplexField_t;
 
     struct RemeshSpectrumShellMetrics {
-        double before = 0.0;
-        double after = 0.0;
+        double enstrophy = 0.0;
         std::uint64_t count = 0;
     };
 
@@ -38,6 +37,9 @@ private:
     int diagnostics_freq_m = 1;
     bool bootstrap_next_push_m = false;
     bool skip_next_rhs_filter_after_remesh_m = false;
+    bool remesh_spectrum_dump_m = false;
+    bool remesh_spectrum_shells_initialized_m = false;
+    std::vector<double> remesh_spectrum_previous_shells_m;
     int last_remesh_step_m = -1;
 
 public:
@@ -87,6 +89,9 @@ public:
 
         initializeParticles();
         this->initNUFFT3D();
+        if (remesh_spectrum_dump_m) {
+            writeStepSpectrumShellDump3D();
+        }
     }
 
     void advance() override {
@@ -97,176 +102,78 @@ public:
         }
     }
 
-    void dumpRemeshSpectrumDiagnostic3D() {
-        reconstructFieldsForRemeshing3D();
+    void setRemeshSpectrumDump(const bool enabled) {
+        remesh_spectrum_dump_m = enabled;
+    }
 
-        auto omegaXBefore = this->omega_x_hat_m.deepCopy();
-        auto omegaYBefore = this->omega_y_hat_m.deepCopy();
-        auto omegaZBefore = this->omega_z_hat_m.deepCopy();
-
-        remeshParticlesFromGrid3D();
-
-        writeRemeshSpectrumModeDump3D(omegaXBefore, omegaYBefore, omegaZBefore);
-        writeRemeshSpectrumShellDump3D(omegaXBefore, omegaYBefore, omegaZBefore);
-
-        if (ippl::Comm->rank() == 0) {
-            Inform m("vif3d_remesh_spectrum ");
-            m << "wrote remesh spectrum diagnostics at step = " << this->it_m
-              << ", time = " << this->time_m << endl;
+    void post_step() override {
+        AlvineManager<T, Dim>::post_step();
+        if (remesh_spectrum_dump_m) {
+            writeStepSpectrumShellDump3D();
         }
     }
 
-    void writeRemeshSpectrumModeDump3D(ComplexField_t& omegaXBefore,
-                                       ComplexField_t& omegaYBefore,
-                                       ComplexField_t& omegaZBefore) {
-        auto oxBefore = omegaXBefore.getHostMirror();
-        auto oyBefore = omegaYBefore.getHostMirror();
-        auto ozBefore = omegaZBefore.getHostMirror();
-        auto oxAfter = this->omega_x_hat_m.getHostMirror();
-        auto oyAfter = this->omega_y_hat_m.getHostMirror();
-        auto ozAfter = this->omega_z_hat_m.getHostMirror();
+    void writeStepSpectrumShellDump3D() {
+        this->spectralScatter3D(false);
+        this->computeSpectralVelocityModes3D();
 
-        Kokkos::deep_copy(oxBefore, omegaXBefore.getView());
-        Kokkos::deep_copy(oyBefore, omegaYBefore.getView());
-        Kokkos::deep_copy(ozBefore, omegaZBefore.getView());
-        Kokkos::deep_copy(oxAfter, this->omega_x_hat_m.getView());
-        Kokkos::deep_copy(oyAfter, this->omega_y_hat_m.getView());
-        Kokkos::deep_copy(ozAfter, this->omega_z_hat_m.getView());
-
-        const auto& layout = this->omega_x_hat_m.getLayout();
-        const auto& lDom = layout.getLocalNDIndex();
-        const int nghost = this->omega_x_hat_m.getNghost();
-
-        const int Nx = this->nr_m[0];
-        const int Ny = this->nr_m[1];
-        const int Nz = this->nr_m[2];
-
-        const T Lx = this->rmax_m[0] - this->rmin_m[0];
-        const T Ly = this->rmax_m[1] - this->rmin_m[1];
-        const T Lz = this->rmax_m[2] - this->rmin_m[2];
-        const T twoPi = T(2.0 * std::acos(-1.0));
-        const double amplitudeFloor = 1e-300;
-
-        const std::string filename =
-            this->diagnosticFileName("remesh_spectrum_modes_3d_rank_")
-            + std::to_string(ippl::Comm->rank()) + ".csv";
-        std::ofstream out(filename, std::ios::out);
-        out.precision(16);
-        out.setf(std::ios::scientific, std::ios::floatfield);
-        out << "method,dt,step,time,viscosity,filter,kx,ky,kz,k_mag,"
-            << "omega_amp_before,omega_amp_after,amp_ratio\n";
-
-        for (int i = nghost; i < static_cast<int>(oxAfter.extent(0)) - nghost; ++i) {
-            for (int j = nghost; j < static_cast<int>(oxAfter.extent(1)) - nghost; ++j) {
-                for (int k = nghost; k < static_cast<int>(oxAfter.extent(2)) - nghost; ++k) {
-                    const int gx = i - nghost + lDom[0].first();
-                    const int gy = j - nghost + lDom[1].first();
-                    const int gz = k - nghost + lDom[2].first();
-
-                    const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                    const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                    const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
-
-                    const bool notMidX = (gx != Nx / 2);
-                    const bool notMidY = (gy != Ny / 2);
-                    const bool notMidZ = (gz != Nz / 2);
-
-                    const T kx = notMidX * twoPi * mx / Lx;
-                    const T ky = notMidY * twoPi * my / Ly;
-                    const T kz = notMidZ * twoPi * mz / Lz;
-                    const T k2 = kx * kx + ky * ky + kz * kz;
-
-                    const auto bx = k2 * oxBefore(i, j, k);
-                    const auto by = k2 * oyBefore(i, j, k);
-                    const auto bz = k2 * ozBefore(i, j, k);
-                    const auto ax = k2 * oxAfter(i, j, k);
-                    const auto ay = k2 * oyAfter(i, j, k);
-                    const auto az = k2 * ozAfter(i, j, k);
-
-                    const double beforeAmp =
-                        bx.real() * bx.real() + bx.imag() * bx.imag()
-                        + by.real() * by.real() + by.imag() * by.imag()
-                        + bz.real() * bz.real() + bz.imag() * bz.imag();
-                    const double afterAmp =
-                        ax.real() * ax.real() + ax.imag() * ax.imag()
-                        + ay.real() * ay.real() + ay.imag() * ay.imag()
-                        + az.real() * az.real() + az.imag() * az.imag();
-                    const double ratio =
-                        beforeAmp > amplitudeFloor ? afterAmp / beforeAmp : 0.0;
-                    const double kmag = std::sqrt(static_cast<double>(mx) * mx
-                                                  + static_cast<double>(my) * my
-                                                  + static_cast<double>(mz) * mz);
-
-                    out << this->method_m << "," << this->dt_m << ","
-                        << this->it_m << "," << this->time_m << ","
-                        << this->viscosity_m << "," << this->spectral_filter_m << ","
-                        << mx << "," << my << "," << mz << "," << kmag << ","
-                        << beforeAmp << "," << afterAmp << "," << ratio << "\n";
-                }
-            }
-        }
-    }
-
-    void writeRemeshSpectrumShellDump3D(ComplexField_t& omegaXBefore,
-                                        ComplexField_t& omegaYBefore,
-                                        ComplexField_t& omegaZBefore) {
-        auto localShells = computeRemeshSpectrumShellMetrics3D(
-            omegaXBefore, omegaYBefore, omegaZBefore);
+        auto localShells = computeCurrentVorticitySpectrumShellMetrics3D();
 
         const int shellCount = static_cast<int>(localShells.size());
-        std::vector<double> localBefore(shellCount);
-        std::vector<double> localAfter(shellCount);
+        std::vector<double> localEnstrophy(shellCount);
         std::vector<std::uint64_t> localCounts(shellCount);
-        std::vector<double> globalBefore(shellCount);
-        std::vector<double> globalAfter(shellCount);
+        std::vector<double> globalEnstrophy(shellCount);
         std::vector<std::uint64_t> globalCounts(shellCount);
 
         for (int shell = 0; shell < shellCount; ++shell) {
-            localBefore[shell] = localShells[shell].before;
-            localAfter[shell] = localShells[shell].after;
+            localEnstrophy[shell] = localShells[shell].enstrophy;
             localCounts[shell] = localShells[shell].count;
         }
 
         ippl::Comm->allreduce(
-            localBefore.data(), globalBefore.data(), shellCount, std::plus<double>());
-        ippl::Comm->allreduce(
-            localAfter.data(), globalAfter.data(), shellCount, std::plus<double>());
+            localEnstrophy.data(), globalEnstrophy.data(), shellCount, std::plus<double>());
         ippl::Comm->allreduce(
             localCounts.data(), globalCounts.data(), shellCount, std::plus<std::uint64_t>());
 
         if (ippl::Comm->rank() == 0) {
             std::ofstream out(this->diagnosticFileName("remesh_spectrum_shells_3d.csv"),
-                              std::ios::out);
+                              remesh_spectrum_shells_initialized_m
+                                  ? std::ios::app : std::ios::out);
             out.precision(16);
             out.setf(std::ios::scientific, std::ios::floatfield);
-            out << "method,dt,step,time,viscosity,filter,k_shell,"
-                << "enstrophy_before,enstrophy_after,ratio,mode_count\n";
+            if (!remesh_spectrum_shells_initialized_m) {
+                out << "method,dt,step,time,viscosity,filter,is_remesh_step,k_shell,"
+                    << "enstrophy,ratio_to_previous_step,mode_count\n";
+            }
 
+            const bool isRemeshStep =
+                this->it_m > 0
+                && remesh_freq_m > 0
+                && static_cast<int>(this->it_m) % remesh_freq_m == 0;
             for (int shell = 0; shell < shellCount; ++shell) {
-                const double ratio =
-                    globalBefore[shell] > 1e-300
-                        ? globalAfter[shell] / globalBefore[shell]
-                        : 0.0;
+                double ratio = 0.0;
+                if (remesh_spectrum_shells_initialized_m
+                    && shell < static_cast<int>(remesh_spectrum_previous_shells_m.size())
+                    && remesh_spectrum_previous_shells_m[shell] > 1e-300) {
+                    ratio = globalEnstrophy[shell] / remesh_spectrum_previous_shells_m[shell];
+                }
                 out << this->method_m << "," << this->dt_m << ","
                     << this->it_m << "," << this->time_m << ","
                     << this->viscosity_m << "," << this->spectral_filter_m << ","
-                    << shell << "," << globalBefore[shell] << ","
-                    << globalAfter[shell] << "," << ratio << ","
+                    << (isRemeshStep ? 1 : 0) << ","
+                    << shell << "," << globalEnstrophy[shell] << "," << ratio << ","
                     << globalCounts[shell] << "\n";
             }
+
+            remesh_spectrum_previous_shells_m = globalEnstrophy;
         }
+        remesh_spectrum_shells_initialized_m = true;
     }
 
-    std::vector<RemeshSpectrumShellMetrics> computeRemeshSpectrumShellMetrics3D(
-        ComplexField_t& omegaXBefore,
-        ComplexField_t& omegaYBefore,
-        ComplexField_t& omegaZBefore) {
-        auto oxBefore = omegaXBefore.getView();
-        auto oyBefore = omegaYBefore.getView();
-        auto ozBefore = omegaZBefore.getView();
-        auto oxAfter = this->omega_x_hat_m.getView();
-        auto oyAfter = this->omega_y_hat_m.getView();
-        auto ozAfter = this->omega_z_hat_m.getView();
+    std::vector<RemeshSpectrumShellMetrics> computeCurrentVorticitySpectrumShellMetrics3D() {
+        auto ox = this->omega_x_hat_m.getView();
+        auto oy = this->omega_y_hat_m.getView();
+        auto oz = this->omega_z_hat_m.getView();
 
         auto& layout = this->omega_x_hat_m.getLayout();
         const auto& lDom = layout.getLocalNDIndex();
@@ -287,20 +194,18 @@ public:
             + static_cast<double>(Nz / 2) * static_cast<double>(Nz / 2))));
         const int shellCount = maxShell + 1;
 
-        Kokkos::View<double*> shellBefore("vif3d_remesh_shell_before", shellCount);
-        Kokkos::View<double*> shellAfter("vif3d_remesh_shell_after", shellCount);
+        Kokkos::View<double*> shellEnstrophy("vif3d_step_shell_enstrophy", shellCount);
         Kokkos::View<std::uint64_t*> shellCounts("vif3d_remesh_shell_counts", shellCount);
-        Kokkos::deep_copy(shellBefore, 0.0);
-        Kokkos::deep_copy(shellAfter, 0.0);
+        Kokkos::deep_copy(shellEnstrophy, 0.0);
         Kokkos::deep_copy(shellCounts, std::uint64_t(0));
 
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
         Kokkos::parallel_for(
             "vif3d_remesh_spectrum_shell_metrics",
             policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(oxAfter.extent(0)) - nghost,
-                         static_cast<int>(oxAfter.extent(1)) - nghost,
-                         static_cast<int>(oxAfter.extent(2)) - nghost}),
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
             KOKKOS_LAMBDA(const int i, const int j, const int k) {
                 const int gx = i - nghost + lDom[0].first();
                 const int gy = j - nghost + lDom[1].first();
@@ -319,38 +224,29 @@ public:
                 const T kz = notMidZ * twoPi * mz / Lz;
                 const T k2 = kx * kx + ky * ky + kz * kz;
 
-                const auto bx = k2 * oxBefore(i, j, k);
-                const auto by = k2 * oyBefore(i, j, k);
-                const auto bz = k2 * ozBefore(i, j, k);
-                const auto ax = k2 * oxAfter(i, j, k);
-                const auto ay = k2 * oyAfter(i, j, k);
-                const auto az = k2 * ozAfter(i, j, k);
+                const auto wx = k2 * ox(i, j, k);
+                const auto wy = k2 * oy(i, j, k);
+                const auto wz = k2 * oz(i, j, k);
 
-                const double beforeAmp =
-                    bx.real() * bx.real() + bx.imag() * bx.imag()
-                    + by.real() * by.real() + by.imag() * by.imag()
-                    + bz.real() * bz.real() + bz.imag() * bz.imag();
-                const double afterAmp =
-                    ax.real() * ax.real() + ax.imag() * ax.imag()
-                    + ay.real() * ay.real() + ay.imag() * ay.imag()
-                    + az.real() * az.real() + az.imag() * az.imag();
+                const double amplitude =
+                    wx.real() * wx.real() + wx.imag() * wx.imag()
+                    + wy.real() * wy.real() + wy.imag() * wy.imag()
+                    + wz.real() * wz.real() + wz.imag() * wz.imag();
                 const T radius2 = T(mx) * T(mx) + T(my) * T(my) + T(mz) * T(mz);
                 const int shell = static_cast<int>(Kokkos::floor(Kokkos::sqrt(radius2)));
 
-                Kokkos::atomic_add(&shellBefore(shell), 0.5 * volume * beforeAmp);
-                Kokkos::atomic_add(&shellAfter(shell), 0.5 * volume * afterAmp);
+                Kokkos::atomic_add(&shellEnstrophy(shell), 0.5 * volume * amplitude);
                 Kokkos::atomic_add(&shellCounts(shell), std::uint64_t(1));
             });
         Kokkos::fence();
 
-        auto hostBefore = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellBefore);
-        auto hostAfter = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellAfter);
+        auto hostEnstrophy =
+            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellEnstrophy);
         auto hostCounts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), shellCounts);
 
         std::vector<RemeshSpectrumShellMetrics> shells(shellCount);
         for (int shell = 0; shell < shellCount; ++shell) {
-            shells[shell].before = hostBefore(shell);
-            shells[shell].after = hostAfter(shell);
+            shells[shell].enstrophy = hostEnstrophy(shell);
             shells[shell].count = hostCounts(shell);
         }
         return shells;
