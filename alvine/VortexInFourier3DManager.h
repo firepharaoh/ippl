@@ -2,9 +2,12 @@
 #define IPPL_VORTEX_IN_FOURIER_3D_MANAGER_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -52,6 +55,8 @@ private:
     bool spectrum_shells_initialized_m = false;
     std::vector<double> spectrum_previous_shells_m;
     int last_remesh_step_m = -1;
+    bool pipeline_trace_m = false;
+    int pipeline_trace_freq_m = 1;
 
 public:
     VortexInFourier3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -141,6 +146,11 @@ public:
 
     void setSpectrumDump(const bool enabled) {
         spectrum_dump_m = enabled;
+    }
+
+    void setPipelineTrace(const bool enabled, const int frequency) {
+        pipeline_trace_m = enabled;
+        pipeline_trace_freq_m = std::max(1, frequency);
     }
 
     void writeStepSpectrumDump3D() {
@@ -616,28 +626,36 @@ public:
     }
 
     void remeshParticles3D() {
+        tracePipelineState3D("BEFORE REMESH");
         reconstructFieldsForRemeshing3D();
         remeshParticlesFromGrid3D();
         bootstrap_next_push_m = true;
         skip_next_rhs_filter_after_remesh_m = true;
         last_remesh_step_m = static_cast<int>(this->it_m + 1);
+        tracePipelineState3D("AFTER REMESH");
     }
 
     void reconstructFieldsForRemeshing3D() {
-        this->spectralScatter3D(false);
+        tracePipelineState3D("REMESH RECONSTRUCT BEFORE SCATTER");
+        tracedSpectralScatter3D(false);
+        tracePipelineState3D("REMESH RECONSTRUCT AFTER SCATTER");
 
         if (this->useShapeFunctionFilter()) {
             this->applyShapeFunctionToSpectralVorticityModes3D();
+            tracePipelineState3D("REMESH RECONSTRUCT AFTER SHAPE");
         }
 
         this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
+        tracePipelineState3D("REMESH RECONSTRUCT AFTER VORTICITY FILTER");
 
         this->computeSpectralVelocityModes3D();
+        tracePipelineState3D("REMESH RECONSTRUCT AFTER BIOT SAVART");
         this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        tracePipelineState3D("REMESH RECONSTRUCT AFTER VELOCITY FILTER");
 
         // Remeshing samples these spectral modes directly with type-2 NUFFT.
         // Keep the IFFT reconstruction path out of this diagnostic/remesh path.
@@ -759,11 +777,14 @@ public:
 
         sampleRemeshedParticlesFromSpectralModes3D(particle_volume);
 
-        this->spectralScatter3D(false);
+        tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER");
+        tracedSpectralScatter3D(false);
+        tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING AFTER SCATTER");
         // The remeshed particles were already sampled from filtered modes.
         // Applying a spectral filter again immediately after assigning them
         // compounds attenuation at every remesh event.
         this->computeSpectralVelocityModes3D();
+        tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING AFTER BIOT SAVART");
     }
 
     void sampleRemeshedParticlesFromSpectralModes3D(const double particle_volume) {
@@ -878,6 +899,466 @@ public:
                 ox(i, j, k) *= k2;
                 oy(i, j, k) *= k2;
                 oz(i, j, k) *= k2;
+            });
+        Kokkos::fence();
+    }
+
+    bool shouldTracePipeline3D() const {
+        return pipeline_trace_m
+               && pipeline_trace_freq_m > 0
+               && static_cast<int>(this->it_m) % pipeline_trace_freq_m == 0;
+    }
+
+    std::array<std::array<int, 3>, 11> traceModes3D() const {
+        return {{{1, 1, 1}, {2, 1, 1}, {4, 4, 4}, {8, 8, 8},
+                 {16, 16, 16}, {32, 32, 32}, {64, 64, 64},
+                 {127, 1, 1}, {128, 1, 1}, {128, 128, 1}, {128, 128, 128}}};
+    }
+
+    void tracedSpectralScatter3D(const bool applyShapeFilter) {
+        if (!shouldTracePipeline3D()) {
+            this->spectralScatter3D(applyShapeFilter);
+            return;
+        }
+
+        if (!this->nufftType1_mp) {
+            throw std::runtime_error("VIF 3D traced scatter called before initNUFFT3D");
+        }
+
+        auto& pc = *this->pcontainer_m;
+        auto omega = pc.omega.getView();
+        auto ox = pc.omega_x.getView();
+        auto oy = pc.omega_y.getView();
+        auto oz = pc.omega_z.getView();
+        auto nlocal = pc.getLocalNum();
+
+        Kokkos::parallel_for(
+            "trace_split_omega_components_3d",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p) {
+                ox(p) = omega(p)[0];
+                oy(p) = omega(p)[1];
+                oz(p) = omega(p)[2];
+            });
+        Kokkos::fence();
+
+        this->omega_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        this->omega_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        this->omega_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
+
+        this->nufftType1_mp->transform(pc.R, pc.omega_x, this->omega_x_hat_m);
+        this->nufftType1_mp->transform(pc.R, pc.omega_y, this->omega_y_hat_m);
+        this->nufftType1_mp->transform(pc.R, pc.omega_z, this->omega_z_hat_m);
+        traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SCATTER");
+
+        if (applyShapeFilter && this->useShapeFunctionFilter()) {
+            this->applyShapeFunctionToSpectralVorticityModes3D();
+            traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SHAPE");
+        }
+
+        auto oxModes = this->omega_x_hat_m.getView();
+        auto oyModes = this->omega_y_hat_m.getView();
+        auto ozModes = this->omega_z_hat_m.getView();
+        auto& layout = this->omega_x_hat_m.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = this->omega_x_hat_m.getNghost();
+
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "trace_precondition_spectral_vorticity_modes_3d",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(oxModes.extent(0)) - nghost,
+                         static_cast<int>(oxModes.extent(1)) - nghost,
+                         static_cast<int>(oxModes.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                if (k2 == T(0)) {
+                    oxModes(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    oyModes(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    ozModes(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
+                    return;
+                }
+
+                const T invVolumeK2 = T(1.0) / (volume * k2);
+                oxModes(i, j, k) *= invVolumeK2;
+                oyModes(i, j, k) *= invVolumeK2;
+                ozModes(i, j, k) *= invVolumeK2;
+            });
+        Kokkos::fence();
+        traceModes3D("STORED AFTER 1/(VOLUME*K2)");
+    }
+
+    void tracePipelineHeader3D(const std::string& stage) const {
+        if (!shouldTracePipeline3D() || ippl::Comm->rank() != 0) {
+            return;
+        }
+        std::cout << "\n=============================\n"
+                  << "STEP " << this->it_m << " TIME " << std::setprecision(16)
+                  << this->time_m << " : " << stage << "\n"
+                  << "=============================\n";
+    }
+
+    void traceGlobalState3D(const std::string& stage) {
+        if (!shouldTracePipeline3D()) {
+            return;
+        }
+
+        const double energy = this->computeSpectralEnergy3D();
+        const double enstrophy = this->computeSpectralEnstrophy3D();
+        const double divU = this->computeSpectralDivergenceL23D();
+        const double divOmega = this->computeSpectralVorticityDivergenceL23D();
+        const double projectionU = this->computeTGVSpectralVelocityProjectionScale3D();
+        const double projectionOmega = this->computeTGVSpectralVorticityProjectionScale3D();
+
+        if (ippl::Comm->rank() == 0) {
+            std::cout << "GLOBAL " << stage << "\n"
+                      << "E = " << std::setprecision(16) << energy << "\n"
+                      << "Z = " << enstrophy << "\n"
+                      << "projection_u = " << projectionU << "\n"
+                      << "projection_omega = " << projectionOmega << "\n"
+                      << "div_u = " << divU << "\n"
+                      << "div_omega = " << divOmega << "\n";
+        }
+    }
+
+    void traceParticles3D(const std::string& stage) {
+        if (!shouldTracePipeline3D() || ippl::Comm->rank() != 0) {
+            return;
+        }
+
+        auto pc = this->pcontainer_m;
+        const size_type nlocal = pc->getLocalNum();
+        std::cout << "PARTICLES " << stage
+                  << " rank=0 local_count=" << nlocal
+                  << " sampled as rank-local indices\n";
+        if (nlocal == 0) {
+            return;
+        }
+
+        auto R = pc->R.getHostMirror();
+        auto Rold = pc->R_old.getHostMirror();
+        auto P = pc->P.getHostMirror();
+        auto u = pc->u.getHostMirror();
+        auto omega = pc->omega.getHostMirror();
+        auto omegaX = pc->omega_x.getHostMirror();
+        auto omegaY = pc->omega_y.getHostMirror();
+        auto omegaZ = pc->omega_z.getHostMirror();
+        auto ux = pc->ux.getHostMirror();
+        auto uy = pc->uy.getHostMirror();
+        auto uz = pc->uz.getHostMirror();
+        auto duxdx = pc->duxdx.getHostMirror();
+        auto duxdy = pc->duxdy.getHostMirror();
+        auto duxdz = pc->duxdz.getHostMirror();
+        auto duydx = pc->duydx.getHostMirror();
+        auto duydy = pc->duydy.getHostMirror();
+        auto duydz = pc->duydz.getHostMirror();
+        auto duzdx = pc->duzdx.getHostMirror();
+        auto duzdy = pc->duzdy.getHostMirror();
+        auto duzdz = pc->duzdz.getHostMirror();
+        auto viscosity = pc->viscosity.getHostMirror();
+        auto viscosityX = pc->viscosity_x.getHostMirror();
+        auto viscosityY = pc->viscosity_y.getHostMirror();
+        auto viscosityZ = pc->viscosity_z.getHostMirror();
+
+        Kokkos::deep_copy(R, pc->R.getView());
+        Kokkos::deep_copy(Rold, pc->R_old.getView());
+        Kokkos::deep_copy(P, pc->P.getView());
+        Kokkos::deep_copy(u, pc->u.getView());
+        Kokkos::deep_copy(omega, pc->omega.getView());
+        Kokkos::deep_copy(omegaX, pc->omega_x.getView());
+        Kokkos::deep_copy(omegaY, pc->omega_y.getView());
+        Kokkos::deep_copy(omegaZ, pc->omega_z.getView());
+        Kokkos::deep_copy(ux, pc->ux.getView());
+        Kokkos::deep_copy(uy, pc->uy.getView());
+        Kokkos::deep_copy(uz, pc->uz.getView());
+        Kokkos::deep_copy(duxdx, pc->duxdx.getView());
+        Kokkos::deep_copy(duxdy, pc->duxdy.getView());
+        Kokkos::deep_copy(duxdz, pc->duxdz.getView());
+        Kokkos::deep_copy(duydx, pc->duydx.getView());
+        Kokkos::deep_copy(duydy, pc->duydy.getView());
+        Kokkos::deep_copy(duydz, pc->duydz.getView());
+        Kokkos::deep_copy(duzdx, pc->duzdx.getView());
+        Kokkos::deep_copy(duzdy, pc->duzdy.getView());
+        Kokkos::deep_copy(duzdz, pc->duzdz.getView());
+        Kokkos::deep_copy(viscosity, pc->viscosity.getView());
+        Kokkos::deep_copy(viscosityX, pc->viscosity_x.getView());
+        Kokkos::deep_copy(viscosityY, pc->viscosity_y.getView());
+        Kokkos::deep_copy(viscosityZ, pc->viscosity_z.getView());
+
+        const std::array<size_type, 5> samples = {
+            size_type(0), nlocal / 4, nlocal / 2, (3 * nlocal) / 4, nlocal - 1};
+        const unsigned nxp = particlesPerDirection3D();
+        const T particleVolume =
+            T(this->rmax_m[0] - this->rmin_m[0])
+            * T(this->rmax_m[1] - this->rmin_m[1])
+            * T(this->rmax_m[2] - this->rmin_m[2])
+            / T(nxp * nxp * nxp);
+        size_type previous = nlocal;
+        for (const auto p : samples) {
+            if (p == previous || p >= nlocal) {
+                continue;
+            }
+            previous = p;
+            const T sx = omega(p)[0] * duxdx(p) + omega(p)[1] * duxdy(p)
+                         + omega(p)[2] * duxdz(p);
+            const T sy = omega(p)[0] * duydx(p) + omega(p)[1] * duydy(p)
+                         + omega(p)[2] * duydz(p);
+            const T sz = omega(p)[0] * duzdx(p) + omega(p)[1] * duzdy(p)
+                         + omega(p)[2] * duzdz(p);
+            const T dtStretchX = T(this->dt_m) * sx;
+            const T dtStretchY = T(this->dt_m) * sy;
+            const T dtStretchZ = T(this->dt_m) * sz;
+            const T dtViscX = T(this->dt_m) * viscosity(p)[0] * particleVolume;
+            const T dtViscY = T(this->dt_m) * viscosity(p)[1] * particleVolume;
+            const T dtViscZ = T(this->dt_m) * viscosity(p)[2] * particleVolume;
+            std::cout << "PARTICLE_LOCAL " << p << "\n"
+                      << "R = " << R(p) << "\n"
+                      << "R_old = " << Rold(p) << "\n"
+                      << "P = " << P(p) << "\n"
+                      << "u = " << u(p) << "\n"
+                      << "u_components = (" << ux(p) << "," << uy(p) << "," << uz(p) << ")\n"
+                      << "omega = " << omega(p) << "\n"
+                      << "omega_components = (" << omegaX(p) << "," << omegaY(p)
+                      << "," << omegaZ(p) << ")\n"
+                      << "GRAD_U = [[" << duxdx(p) << "," << duxdy(p) << ","
+                      << duxdz(p) << "],[" << duydx(p) << "," << duydy(p)
+                      << "," << duydz(p) << "],[" << duzdx(p) << "," << duzdy(p)
+                      << "," << duzdz(p) << "]]\n"
+                      << "STRETCHING = (" << sx << "," << sy << "," << sz << ")\n"
+                      << "VISCOSITY = " << viscosity(p) << "\n"
+                      << "viscosity_components = (" << viscosityX(p) << ","
+                      << viscosityY(p) << "," << viscosityZ(p) << ")\n"
+                      << "RHS_OMEGA = (" << sx + viscosity(p)[0] << ","
+                      << sy + viscosity(p)[1] << "," << sz + viscosity(p)[2] << ")\n"
+                      << "dt_stretching_update = (" << dtStretchX << ","
+                      << dtStretchY << "," << dtStretchZ << ")\n"
+                      << "dt_viscosity_update = (" << dtViscX << ","
+                      << dtViscY << "," << dtViscZ << ")\n"
+                      << "dt_total_omega_update = (" << dtStretchX + dtViscX << ","
+                      << dtStretchY + dtViscY << "," << dtStretchZ + dtViscZ << ")\n"
+                      << "forward_dt_displacement = " << P(p) * this->dt_m << "\n";
+        }
+    }
+
+    void traceRawSpectralVorticityModes3D(const std::string& stage) {
+        if (!shouldTracePipeline3D()) {
+            return;
+        }
+
+        auto oxHost = this->omega_x_hat_m.getHostMirror();
+        auto oyHost = this->omega_y_hat_m.getHostMirror();
+        auto ozHost = this->omega_z_hat_m.getHostMirror();
+        Kokkos::deep_copy(oxHost, this->omega_x_hat_m.getView());
+        Kokkos::deep_copy(oyHost, this->omega_y_hat_m.getView());
+        Kokkos::deep_copy(ozHost, this->omega_z_hat_m.getView());
+
+        const auto& lDom = this->omega_x_hat_m.getLayout().getLocalNDIndex();
+        const int nghost = this->omega_x_hat_m.getNghost();
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        for (const auto& mode : traceModes3D()) {
+            const int mx = mode[0];
+            const int my = mode[1];
+            const int mz = mode[2];
+            if (std::abs(mx) > Nx / 2 || std::abs(my) > Ny / 2 || std::abs(mz) > Nz / 2) {
+                continue;
+            }
+
+            const int gx = mx >= 0 ? mx : Nx + mx;
+            const int gy = my >= 0 ? my : Ny + my;
+            const int gz = mz >= 0 ? mz : Nz + mz;
+            if (gx < lDom[0].first() || gx > lDom[0].last()
+                || gy < lDom[1].first() || gy > lDom[1].last()
+                || gz < lDom[2].first() || gz > lDom[2].last()) {
+                continue;
+            }
+
+            const int i = gx - lDom[0].first() + nghost;
+            const int j = gy - lDom[1].first() + nghost;
+            const int k = gz - lDom[2].first() + nghost;
+            const bool notMidX = (gx != Nx / 2);
+            const bool notMidY = (gy != Ny / 2);
+            const bool notMidZ = (gz != Nz / 2);
+            const T kx = notMidX * twoPi * mx / Lx;
+            const T ky = notMidY * twoPi * my / Ly;
+            const T kz = notMidZ * twoPi * mz / Lz;
+            const T k2 = kx * kx + ky * ky + kz * kz;
+            const T invVolumeK2 = k2 == T(0) ? T(0) : T(1.0) / (volume * k2);
+
+            std::cout << "MODE " << stage << " rank=" << ippl::Comm->rank()
+                      << " (" << mx << "," << my << "," << mz << ")\n"
+                      << "kx,ky,kz = (" << kx << "," << ky << "," << kz << ")\n"
+                      << "k2 = " << k2 << " volume = " << volume
+                      << " inv_volume_k2 = " << invVolumeK2 << "\n"
+                      << "omega_raw = (" << oxHost(i, j, k) << ","
+                      << oyHost(i, j, k) << "," << ozHost(i, j, k) << ")\n"
+                      << "omega_raw_over_volume = (" << oxHost(i, j, k) / volume
+                      << "," << oyHost(i, j, k) / volume << ","
+                      << ozHost(i, j, k) / volume << ")\n"
+                      << "expected_stored_raw_over_volume_k2 = ("
+                      << invVolumeK2 * oxHost(i, j, k) << ","
+                      << invVolumeK2 * oyHost(i, j, k) << ","
+                      << invVolumeK2 * ozHost(i, j, k) << ")\n";
+        }
+    }
+
+    void traceModes3D(const std::string& stage) {
+        if (!shouldTracePipeline3D()) {
+            return;
+        }
+
+        auto oxHost = this->omega_x_hat_m.getHostMirror();
+        auto oyHost = this->omega_y_hat_m.getHostMirror();
+        auto ozHost = this->omega_z_hat_m.getHostMirror();
+        auto uxHost = this->ux_hat_m.getHostMirror();
+        auto uyHost = this->uy_hat_m.getHostMirror();
+        auto uzHost = this->uz_hat_m.getHostMirror();
+        auto duxdxHost = this->duxdx_hat_m.getHostMirror();
+        auto duxdyHost = this->duxdy_hat_m.getHostMirror();
+        auto duxdzHost = this->duxdz_hat_m.getHostMirror();
+        auto duydxHost = this->duydx_hat_m.getHostMirror();
+        auto duydyHost = this->duydy_hat_m.getHostMirror();
+        auto duydzHost = this->duydz_hat_m.getHostMirror();
+        auto duzdxHost = this->duzdx_hat_m.getHostMirror();
+        auto duzdyHost = this->duzdy_hat_m.getHostMirror();
+        auto duzdzHost = this->duzdz_hat_m.getHostMirror();
+
+        Kokkos::deep_copy(oxHost, this->omega_x_hat_m.getView());
+        Kokkos::deep_copy(oyHost, this->omega_y_hat_m.getView());
+        Kokkos::deep_copy(ozHost, this->omega_z_hat_m.getView());
+        Kokkos::deep_copy(uxHost, this->ux_hat_m.getView());
+        Kokkos::deep_copy(uyHost, this->uy_hat_m.getView());
+        Kokkos::deep_copy(uzHost, this->uz_hat_m.getView());
+        Kokkos::deep_copy(duxdxHost, this->duxdx_hat_m.getView());
+        Kokkos::deep_copy(duxdyHost, this->duxdy_hat_m.getView());
+        Kokkos::deep_copy(duxdzHost, this->duxdz_hat_m.getView());
+        Kokkos::deep_copy(duydxHost, this->duydx_hat_m.getView());
+        Kokkos::deep_copy(duydyHost, this->duydy_hat_m.getView());
+        Kokkos::deep_copy(duydzHost, this->duydz_hat_m.getView());
+        Kokkos::deep_copy(duzdxHost, this->duzdx_hat_m.getView());
+        Kokkos::deep_copy(duzdyHost, this->duzdy_hat_m.getView());
+        Kokkos::deep_copy(duzdzHost, this->duzdz_hat_m.getView());
+
+        const auto& lDom = this->omega_x_hat_m.getLayout().getLocalNDIndex();
+        const int nghost = this->omega_x_hat_m.getNghost();
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T volume = Lx * Ly * Lz;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        for (const auto& mode : traceModes3D()) {
+            const int mx = mode[0];
+            const int my = mode[1];
+            const int mz = mode[2];
+            if (std::abs(mx) > Nx / 2 || std::abs(my) > Ny / 2 || std::abs(mz) > Nz / 2) {
+                continue;
+            }
+            const int gx = mx >= 0 ? mx : Nx + mx;
+            const int gy = my >= 0 ? my : Ny + my;
+            const int gz = mz >= 0 ? mz : Nz + mz;
+            if (gx < lDom[0].first() || gx > lDom[0].last()
+                || gy < lDom[1].first() || gy > lDom[1].last()
+                || gz < lDom[2].first() || gz > lDom[2].last()) {
+                continue;
+            }
+
+            const int i = gx - lDom[0].first() + nghost;
+            const int j = gy - lDom[1].first() + nghost;
+            const int k = gz - lDom[2].first() + nghost;
+            const bool notMidX = (gx != Nx / 2);
+            const bool notMidY = (gy != Ny / 2);
+            const bool notMidZ = (gz != Nz / 2);
+            const T kx = notMidX * twoPi * mx / Lx;
+            const T ky = notMidY * twoPi * my / Ly;
+            const T kz = notMidZ * twoPi * mz / Lz;
+            const T k2 = kx * kx + ky * ky + kz * kz;
+            const T invVolumeK2 = k2 == T(0) ? T(0) : T(1.0) / (volume * k2);
+            std::cout << "MODE " << stage << " rank=" << ippl::Comm->rank()
+                      << " (" << mx << "," << my << "," << mz << ")\n"
+                      << "kx,ky,kz = (" << kx << "," << ky << "," << kz << ")\n"
+                      << "k2 = " << k2 << " volume = " << volume
+                      << " inv_volume_k2 = " << invVolumeK2 << "\n"
+                      << "omega_stored = (" << oxHost(i, j, k) << ","
+                      << oyHost(i, j, k) << "," << ozHost(i, j, k) << ")\n"
+                      << "omega_physical_coeff = (" << k2 * oxHost(i, j, k) << ","
+                      << k2 * oyHost(i, j, k) << "," << k2 * ozHost(i, j, k) << ")\n"
+                      << "u_hat = (" << uxHost(i, j, k) << "," << uyHost(i, j, k)
+                      << "," << uzHost(i, j, k) << ")\n"
+                      << "grad_u_hat = [[" << duxdxHost(i, j, k) << ","
+                      << duxdyHost(i, j, k) << "," << duxdzHost(i, j, k)
+                      << "],[" << duydxHost(i, j, k) << "," << duydyHost(i, j, k)
+                      << "," << duydzHost(i, j, k) << "],[" << duzdxHost(i, j, k)
+                      << "," << duzdyHost(i, j, k) << "," << duzdzHost(i, j, k)
+                      << "]]\n";
+        }
+    }
+
+    void tracePipelineState3D(const std::string& stage) {
+        if (!shouldTracePipeline3D()) {
+            return;
+        }
+        tracePipelineHeader3D(stage);
+        traceGlobalState3D(stage);
+        traceParticles3D(stage);
+        traceModes3D(stage);
+        ippl::Comm->barrier();
+    }
+
+    void zeroParticleViscosityForTrace3D() {
+        auto pc = this->pcontainer_m;
+        auto viscosity = pc->viscosity.getView();
+        auto viscosityX = pc->viscosity_x.getView();
+        auto viscosityY = pc->viscosity_y.getView();
+        auto viscosityZ = pc->viscosity_z.getView();
+        const auto n = pc->getLocalNum();
+
+        Kokkos::parallel_for(
+            "zero_particle_viscosity_for_trace_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                viscosityX(p) = T(0);
+                viscosityY(p) = T(0);
+                viscosityZ(p) = T(0);
+                viscosity(p)[0] = T(0);
+                viscosity(p)[1] = T(0);
+                viscosity(p)[2] = T(0);
             });
         Kokkos::fence();
     }
@@ -1162,17 +1643,22 @@ public:
 
         std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
+        tracePipelineState3D("BEFORE SCATTER");
         IpplTimings::startTimer(par2gridTimer);
         refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
+        tracePipelineState3D("AFTER SCATTER");
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
+        tracePipelineState3D("AFTER BIOT SAVART");
         this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        tracePipelineState3D("AFTER VELOCITY FILTER");
         this->computeSpectralVelocityGradientModes3D();
         IpplTimings::stopTimer(SolveTimer);
+        tracePipelineState3D("AFTER GRADIENT");
 
         IpplTimings::startTimer(PTimer);
         if (shouldLogDiagnostics3D()) {
@@ -1187,25 +1673,36 @@ public:
         IpplTimings::startTimer(gradientGatherTimer);
         this->spectralGatherGradientModes3D();
         IpplTimings::stopTimer(gradientGatherTimer);
+        tracePipelineState3D("AFTER GRADIENT GATHER");
 
         IpplTimings::startTimer(stretchingTimer);
+        tracePipelineState3D("BEFORE STRETCHING");
         this->applyParticleVortexStretching3D();
         IpplTimings::stopTimer(stretchingTimer);
+        tracePipelineState3D("AFTER STRETCHING");
 
         IpplTimings::startTimer(grid2parTimer);
         this->spectralGather3D();
         IpplTimings::stopTimer(grid2parTimer);
+        tracePipelineState3D("AFTER VELOCITY GATHER");
 
         if (this->viscosity_m > 0.0) {
             this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->computeSpectralViscosityModes3D();
+            tracePipelineState3D("AFTER VISCOSITY MODES");
             this->spectralGatherViscosity3D();
+            tracePipelineState3D("AFTER VISCOSITY GATHER");
             this->applyParticleViscosity3D();
+            tracePipelineState3D("AFTER VISCOSITY UPDATE");
+        } else if (shouldTracePipeline3D()) {
+            zeroParticleViscosityForTrace3D();
+            tracePipelineState3D("VISCOSITY ZERO");
         }
 
         IpplTimings::startTimer(RTimer);
+        tracePipelineState3D("BEFORE PARTICLE PUSH");
         if (this->it_m == 0 || bootstrap_next_push_m) {
             pc->R_old = pc->R;
             pc->R = pc->R + pc->P * this->dt_m;
@@ -1219,10 +1716,12 @@ public:
             pc->R = R_old_temp + 2 * pc->P * this->dt_m;
         }
         IpplTimings::stopTimer(RTimer);
+        tracePipelineState3D("AFTER PARTICLE PUSH BEFORE UPDATE");
 
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+        tracePipelineState3D("AFTER PC UPDATE");
 
         if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
             remeshParticles3D();
@@ -1343,7 +1842,7 @@ private:
             consumeRemeshSkip ? skip_next_rhs_filter_after_remesh_m
                               : (last_remesh_step_m == static_cast<int>(this->it_m));
 
-        this->spectralScatter3D(!skipFilter);
+        tracedSpectralScatter3D(!skipFilter);
         if (!skipFilter) {
             this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
             this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);

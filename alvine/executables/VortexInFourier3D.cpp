@@ -29,6 +29,7 @@ int main(int argc, char* argv[]) {
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
                    "[--rhs-consistency-time time] [--remesh-spectrum-dump] "
+                   "[--pipeline-trace] [--pipeline-trace-freq frequency] "
                    "[--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
@@ -55,6 +56,8 @@ int main(int argc, char* argv[]) {
         int diagnostics_freq = 1;
         double rhs_consistency_time = -1.0;
         bool remesh_spectrum_dump = false;
+        bool pipeline_trace = false;
+        int pipeline_trace_freq = 1;
         if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
             remesh_freq = std::atoi(argv[arg++]);
         }
@@ -88,6 +91,10 @@ int main(int argc, char* argv[]) {
                                [](unsigned char c) { return std::tolower(c); });
             } else if (option == "--remesh-spectrum-dump") {
                 remesh_spectrum_dump = true;
+            } else if (option == "--pipeline-trace") {
+                pipeline_trace = true;
+            } else if (option == "--pipeline-trace-freq" && arg < static_cast<unsigned>(argc)) {
+                pipeline_trace_freq = std::atoi(argv[arg++]);
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
@@ -114,6 +121,9 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--integrator") {
                 msg << "Missing value after --integrator" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--pipeline-trace-freq") {
+                msg << "Missing value after --pipeline-trace-freq" << endl;
                 ippl::Comm->abort();
             } else if ((option == "--overallocate" || option == "-b" || option == "--info"
                         || option == "-i" || option == "--timer-fences")
@@ -163,6 +173,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (pipeline_trace_freq <= 0) {
+            msg << "Invalid --pipeline-trace-freq value " << pipeline_trace_freq
+                << ". Use a positive frequency." << endl;
+            ippl::Comm->abort();
+        }
+
         Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(test_case);
         Vector_t<double, Dim> origin = rmin;
@@ -179,6 +195,8 @@ int main(int argc, char* argv[]) {
             << " Diagnostics frequency: " << diagnostics_freq
             << " RHS consistency time: " << rhs_consistency_time
             << " Remesh spectrum dump: " << (remesh_spectrum_dump ? "true" : "false")
+            << " Pipeline trace: " << (pipeline_trace ? "true" : "false")
+            << " Pipeline trace frequency: " << pipeline_trace_freq
             << " Time integrator: " << time_integrator << endl;
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
@@ -187,6 +205,7 @@ int main(int argc, char* argv[]) {
                                             diagnostics_freq);
         manager.setRHSConsistencyTime(rhs_consistency_time);
         manager.setSpectrumDump(remesh_spectrum_dump);
+        manager.setPipelineTrace(pipeline_trace, pipeline_trace_freq);
         manager.pre_run();
         manager.run(manager.getNt());
 

@@ -960,6 +960,9 @@
         auto duzdx = pc.duzdx.getView();
         auto duzdy = pc.duzdy.getView();
         auto duzdz = pc.duzdz.getView();
+        auto omegaXAttrib = pc.omega_x.getView();
+        auto omegaYAttrib = pc.omega_y.getView();
+        auto omegaZAttrib = pc.omega_z.getView();
 
         const T dt = T(this->dt_m);
         const auto n = pc.getLocalNum();
@@ -985,6 +988,10 @@
                 omega(p)[0] += dt * (omegaX * dUxdx + omegaY * dUxdy + omegaZ * dUxdz);
                 omega(p)[1] += dt * (omegaX * dUydx + omegaY * dUydy + omegaZ * dUydz);
                 omega(p)[2] += dt * (omegaX * dUzdx + omegaY * dUzdy + omegaZ * dUzdz);
+
+                omegaXAttrib(p) = omega(p)[0];
+                omegaYAttrib(p) = omega(p)[1];
+                omegaZAttrib(p) = omega(p)[2];
             });
         Kokkos::fence();
     }
