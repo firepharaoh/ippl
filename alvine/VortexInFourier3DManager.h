@@ -1137,6 +1137,9 @@ public:
             const T dtViscX = T(this->dt_m) * viscosity(p)[0] * particleVolume;
             const T dtViscY = T(this->dt_m) * viscosity(p)[1] * particleVolume;
             const T dtViscZ = T(this->dt_m) * viscosity(p)[2] * particleVolume;
+            const T dispX = P(p)[0] * T(this->dt_m);
+            const T dispY = P(p)[1] * T(this->dt_m);
+            const T dispZ = P(p)[2] * T(this->dt_m);
             std::cout << "PARTICLE_LOCAL " << p << "\n"
                       << "R = " << R(p) << "\n"
                       << "R_old = " << Rold(p) << "\n"
@@ -1162,7 +1165,8 @@ public:
                       << dtViscY << "," << dtViscZ << ")\n"
                       << "dt_total_omega_update = (" << dtStretchX + dtViscX << ","
                       << dtStretchY + dtViscY << "," << dtStretchZ + dtViscZ << ")\n"
-                      << "forward_dt_displacement = " << P(p) * this->dt_m << "\n";
+                      << "forward_dt_displacement = (" << dispX << ","
+                      << dispY << "," << dispZ << ")\n";
         }
     }
 
