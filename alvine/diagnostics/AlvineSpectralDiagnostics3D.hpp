@@ -122,8 +122,9 @@
         double globalEnstrophy = 0.0;
         ippl::Comm->allreduce(localEnstrophy, globalEnstrophy, 1, std::plus<double>());
 
-        // omega_*_hat_m stores omega_hat / k^2 after spectral scatter.
-        // Recover omega_hat by multiplying by k^2 before applying Parseval.
+        // omega_*_hat_m stores raw type-1 vorticity modes divided by
+        // volume*k^2 after spectral scatter. Multiplying by k^2 recovers the
+        // Fourier-series vorticity coefficient used by Parseval.
         return T(0.5) * volume * globalEnstrophy;
     }
 
@@ -389,8 +390,9 @@
         double globalDiv2 = 0.0;
         ippl::Comm->allreduce(localDiv2, globalDiv2, 1, std::plus<double>());
 
-        // omega_*_hat_m stores omega_hat / k^2 after spectral scatter.
-        // Recover omega_hat by multiplying by k^2 before applying Parseval.
+        // omega_*_hat_m stores raw type-1 vorticity modes divided by
+        // volume*k^2 after spectral scatter. Multiplying by k^2 recovers the
+        // Fourier-series vorticity coefficient used by Parseval.
         return std::sqrt(volume * globalDiv2);
     }
 

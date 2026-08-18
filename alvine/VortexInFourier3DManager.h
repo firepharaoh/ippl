@@ -288,9 +288,9 @@ public:
         const std::string& filename = "rhs_consistency_3d.csv") {
         refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
 
         this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
@@ -635,9 +635,9 @@ public:
         this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
 
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
 
         // Remeshing samples these spectral modes directly with type-2 NUFFT.
         // Keep the IFFT reconstruction path out of this diagnostic/remesh path.
@@ -785,7 +785,7 @@ public:
         auto oyModes = this->omega_y_hat_m.deepCopy();
         auto ozModes = this->omega_z_hat_m.deepCopy();
 
-        recoverPhysicalVorticityModesForSampling3D(oxModes, oyModes, ozModes);
+        recoverFourierSeriesVorticityModesForSampling3D(oxModes, oyModes, ozModes);
 
         this->nufftType2_mp->transform(pc->R, pc->omega_x, oxModes);
         this->nufftType2_mp->transform(pc->R, pc->omega_y, oyModes);
@@ -830,9 +830,9 @@ public:
         Kokkos::fence();
     }
 
-    void recoverPhysicalVorticityModesForSampling3D(ComplexField_t& oxModes,
-                                                    ComplexField_t& oyModes,
-                                                    ComplexField_t& ozModes) {
+    void recoverFourierSeriesVorticityModesForSampling3D(ComplexField_t& oxModes,
+                                                         ComplexField_t& oyModes,
+                                                         ComplexField_t& ozModes) {
         auto ox = oxModes.getView();
         auto oy = oyModes.getView();
         auto oz = ozModes.getView();
@@ -894,9 +894,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
@@ -928,9 +928,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
 
         if (this->viscosity_m > 0.0) {
@@ -1168,9 +1168,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
         IpplTimings::stopTimer(SolveTimer);
 
@@ -1239,9 +1239,9 @@ public:
 
         refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
 

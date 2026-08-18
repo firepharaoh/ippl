@@ -211,6 +211,12 @@
         }
     }
 
+    void applyConfiguredSpectralVelocityFilter3D(ComplexField_t& modes) {
+        if (useTwoThirdsFilter()) {
+            twoThirdsFilter3D(modes);
+        }
+    }
+
     void projectSpectralVorticityModes3D() {
         auto ox = omega_x_hat_m.getView();
         auto oy = omega_y_hat_m.getView();
@@ -479,9 +485,9 @@
         applyConfiguredSpectralFilter3D(omega_y_hat_m);
         applyConfiguredSpectralFilter3D(omega_z_hat_m);
         computeSpectralVelocityModes3D();
-        applyConfiguredSpectralFilter3D(ux_hat_m);
-        applyConfiguredSpectralFilter3D(uy_hat_m);
-        applyConfiguredSpectralFilter3D(uz_hat_m);
+        applyConfiguredSpectralVelocityFilter3D(ux_hat_m);
+        applyConfiguredSpectralVelocityFilter3D(uy_hat_m);
+        applyConfiguredSpectralVelocityFilter3D(uz_hat_m);
         spectralGather3D();
     }
 
