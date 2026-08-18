@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -226,16 +228,9 @@ public:
         const T volume = Lx * Ly * Lz;
         const T twoPi = T(2.0 * std::acos(-1.0));
 
-        const std::string filename =
-            this->diagnosticFileName("remesh_spectrum_modes_3d_rank_")
-            + std::to_string(ippl::Comm->rank()) + ".csv";
-        std::ofstream out(filename, spectrum_modes_initialized_m ? std::ios::app : std::ios::out);
-        out.precision(16);
-        out.setf(std::ios::scientific, std::ios::floatfield);
-        if (!spectrum_modes_initialized_m) {
-            out << "method,dt,step,time,viscosity,filter,is_remesh_step,"
-                << "kx,ky,kz,k_mag,omega_amp,enstrophy_density\n";
-        }
+        std::ostringstream localRows;
+        localRows.precision(16);
+        localRows.setf(std::ios::scientific, std::ios::floatfield);
 
         const bool isRemeshStep =
             this->it_m > 0
@@ -274,16 +269,51 @@ public:
                                                   + static_cast<double>(mz) * mz);
                     const double enstrophyDensity = 0.5 * volume * omegaAmp;
 
-                    out << this->method_m << "," << this->dt_m << ","
-                        << this->it_m << "," << this->time_m << ","
-                        << this->viscosity_m << "," << this->spectral_filter_m << ","
-                        << (isRemeshStep ? 1 : 0) << ","
-                        << mx << "," << my << "," << mz << "," << kmag << ","
-                        << omegaAmp << "," << enstrophyDensity << "\n";
+                    localRows << this->method_m << "," << this->dt_m << ","
+                              << this->it_m << "," << this->time_m << ","
+                              << this->viscosity_m << "," << this->spectral_filter_m << ","
+                              << (isRemeshStep ? 1 : 0) << ","
+                              << mx << "," << my << "," << mz << "," << kmag << ","
+                              << omegaAmp << "," << enstrophyDensity << "\n";
                 }
             }
         }
 
+        const std::string localStr = localRows.str();
+        const int rank = ippl::Comm->rank();
+        const int ranks = ippl::Comm->size();
+        const MPI_Aint localSize = static_cast<MPI_Aint>(localStr.size());
+        std::vector<MPI_Aint> sizes(ranks, 0);
+        MPI_Gather(&localSize, 1, MPI_AINT, sizes.data(), 1, MPI_AINT, 0,
+                   ippl::Comm->getCommunicator());
+
+        std::vector<int> intSizes(ranks, 0);
+        std::vector<int> displs(ranks, 0);
+        std::vector<char> allRows;
+        if (rank == 0) {
+            long long totalSize = 0;
+            for (int r = 0; r < ranks; ++r) {
+                intSizes[r] = static_cast<int>(std::min<MPI_Aint>(
+                    sizes[r], static_cast<MPI_Aint>(std::numeric_limits<int>::max())));
+                displs[r] = static_cast<int>(totalSize);
+                totalSize += intSizes[r];
+            }
+            allRows.resize(static_cast<std::size_t>(totalSize));
+        }
+
+        MPI_Gatherv(localStr.data(), static_cast<int>(localStr.size()), MPI_CHAR,
+                    allRows.data(), intSizes.data(), displs.data(), MPI_CHAR, 0,
+                    ippl::Comm->getCommunicator());
+
+        if (rank == 0) {
+            std::ofstream out(this->diagnosticFileName("remesh_spectrum_modes_3d.csv"),
+                              spectrum_modes_initialized_m ? std::ios::app : std::ios::out);
+            if (!spectrum_modes_initialized_m) {
+                out << "method,dt,step,time,viscosity,filter,is_remesh_step,"
+                    << "kx,ky,kz,k_mag,omega_amp,enstrophy_density\n";
+            }
+            out.write(allRows.data(), static_cast<std::streamsize>(allRows.size()));
+        }
         spectrum_modes_initialized_m = true;
     }
 
