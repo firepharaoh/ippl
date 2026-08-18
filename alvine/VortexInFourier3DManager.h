@@ -639,8 +639,10 @@ public:
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
 
-        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
-        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+        // Remeshing samples these spectral modes directly with type-2 NUFFT.
+        // Keep the IFFT reconstruction path out of this diagnostic/remesh path.
+        // this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        // this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
     }
 
     void remeshParticlesFromGrid3D() {
@@ -726,25 +728,13 @@ public:
 
         const size_type nlocal = pc->getLocalNum();
 
-        const int nghost = this->fcontainer_m->getOmegaField().getNghost();
-
         auto R_view       = pc->R.getView();
         auto R_old_view   = pc->R_old.getView();
-        auto P_view       = pc->P.getView();
-        auto omega_view   = pc->omega.getView();
-        auto omega_x_view = pc->omega_x.getView();
-        auto omega_y_view = pc->omega_y.getView();
-        auto omega_z_view = pc->omega_z.getView();
 
-        auto omega_grid = this->fcontainer_m->getOmegaField().getView();
-        auto u_grid     = this->fcontainer_m->getUField().getView();
-
-        Vector_t<double, Dim> rmin = this->rmin_m;
-        Vector_t<double, Dim> hr   = this->hr_m;
         const double particle_volume = dxp * dyp * dzp;
 
         Kokkos::parallel_for(
-            "remesh_vif_3d_particles_from_spectral_grid",
+            "place_vif_3d_remesh_lattice_particles",
             nlocal,
             KOKKOS_LAMBDA(const int p) {
                 const unsigned ix_local = p % nxp_local;
@@ -759,41 +749,137 @@ public:
                 const double y = ymin_global + (iy_global + 0.5) * dyp;
                 const double z = zmin_global + (iz_global + 0.5) * dzp;
 
-                int grid_i = static_cast<int>(Kokkos::floor((x - rmin[0]) / hr[0]));
-                int grid_j = static_cast<int>(Kokkos::floor((y - rmin[1]) / hr[1]));
-                int grid_k = static_cast<int>(Kokkos::floor((z - rmin[2]) / hr[2]));
-
-                grid_i = grid_i < local_start_x ? local_start_x : grid_i;
-                grid_i = grid_i > local_end_x ? local_end_x : grid_i;
-                grid_j = grid_j < local_start_y ? local_start_y : grid_j;
-                grid_j = grid_j > local_end_y ? local_end_y : grid_j;
-                grid_k = grid_k < local_start_z ? local_start_z : grid_k;
-                grid_k = grid_k > local_end_z ? local_end_z : grid_k;
-
-                const int li = grid_i - local_start_x + nghost;
-                const int lj = grid_j - local_start_y + nghost;
-                const int lk = grid_k - local_start_z + nghost;
-
                 R_view(p)[0] = x;
                 R_view(p)[1] = y;
                 R_view(p)[2] = z;
                 R_old_view(p) = R_view(p);
-
-                const auto omega_value = omega_grid(li, lj, lk) * particle_volume;
-                omega_view(p)   = omega_value;
-                omega_x_view(p) = omega_value[0];
-                omega_y_view(p) = omega_value[1];
-                omega_z_view(p) = omega_value[2];
-                P_view(p) = u_grid(li, lj, lk);
             });
 
         Kokkos::fence();
 
+        sampleRemeshedParticlesFromSpectralModes3D(particle_volume);
+
         this->spectralScatter3D(false);
-        // The reconstructed grid field was already produced from filtered modes.
-        // Applying a spectral filter again immediately after assigning remeshed
-        // particles compounds attenuation at every remesh event.
+        // The remeshed particles were already sampled from filtered modes.
+        // Applying a spectral filter again immediately after assigning them
+        // compounds attenuation at every remesh event.
         this->computeSpectralVelocityModes3D();
+    }
+
+    void sampleRemeshedParticlesFromSpectralModes3D(const double particle_volume) {
+        if (!this->nufftType2_mp) {
+            throw std::runtime_error(
+                "VIF 3D remeshing requires type-2 NUFFT to sample spectral modes.");
+        }
+
+        auto pc = this->pcontainer_m;
+
+        pc->omega_x = 0.0;
+        pc->omega_y = 0.0;
+        pc->omega_z = 0.0;
+        pc->ux = 0.0;
+        pc->uy = 0.0;
+        pc->uz = 0.0;
+
+        auto oxModes = this->omega_x_hat_m.deepCopy();
+        auto oyModes = this->omega_y_hat_m.deepCopy();
+        auto ozModes = this->omega_z_hat_m.deepCopy();
+
+        recoverPhysicalVorticityModesForSampling3D(oxModes, oyModes, ozModes);
+
+        this->nufftType2_mp->transform(pc->R, pc->omega_x, oxModes);
+        this->nufftType2_mp->transform(pc->R, pc->omega_y, oyModes);
+        this->nufftType2_mp->transform(pc->R, pc->omega_z, ozModes);
+
+        auto uxModes = this->ux_hat_m.deepCopy();
+        auto uyModes = this->uy_hat_m.deepCopy();
+        auto uzModes = this->uz_hat_m.deepCopy();
+
+        this->nufftType2_mp->transform(pc->R, pc->ux, uxModes);
+        this->nufftType2_mp->transform(pc->R, pc->uy, uyModes);
+        this->nufftType2_mp->transform(pc->R, pc->uz, uzModes);
+
+        auto omega = pc->omega.getView();
+        auto omegaX = pc->omega_x.getView();
+        auto omegaY = pc->omega_y.getView();
+        auto omegaZ = pc->omega_z.getView();
+        auto P = pc->P.getView();
+        auto u = pc->u.getView();
+        auto ux = pc->ux.getView();
+        auto uy = pc->uy.getView();
+        auto uz = pc->uz.getView();
+        const auto nlocal = pc->getLocalNum();
+        const T particleVolume = T(particle_volume);
+
+        Kokkos::parallel_for(
+            "pack_remeshed_vif_3d_type2_samples",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p) {
+                omega(p)[0] = omegaX(p) * particleVolume;
+                omega(p)[1] = omegaY(p) * particleVolume;
+                omega(p)[2] = omegaZ(p) * particleVolume;
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
+
+                P(p)[0] = ux(p);
+                P(p)[1] = uy(p);
+                P(p)[2] = uz(p);
+                u(p) = P(p);
+            });
+        Kokkos::fence();
+    }
+
+    void recoverPhysicalVorticityModesForSampling3D(ComplexField_t& oxModes,
+                                                    ComplexField_t& oyModes,
+                                                    ComplexField_t& ozModes) {
+        auto ox = oxModes.getView();
+        auto oy = oyModes.getView();
+        auto oz = ozModes.getView();
+
+        auto& layout = oxModes.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = oxModes.getNghost();
+
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "recover_vif_3d_type2_vorticity_modes",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                ox(i, j, k) *= k2;
+                oy(i, j, k) *= k2;
+                oz(i, j, k) *= k2;
+            });
+        Kokkos::fence();
     }
 
     void computeSpectralParticleVelocity(bool diagnostics) {
