@@ -5,9 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
-#include <limits>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -52,7 +50,6 @@ private:
     double rhs_consistency_time_m = -1.0;
     bool spectrum_dump_m = false;
     bool spectrum_shells_initialized_m = false;
-    bool spectrum_modes_initialized_m = false;
     std::vector<double> spectrum_previous_shells_m;
     int last_remesh_step_m = -1;
 
@@ -150,7 +147,6 @@ public:
         this->spectralScatter3D(false);
         this->computeSpectralVelocityModes3D();
         writeStepSpectrumShellDump3D();
-        writeStepSpectrumModeDump3D();
     }
 
     void writeStepSpectrumShellDump3D() {
@@ -204,117 +200,6 @@ public:
             spectrum_previous_shells_m = globalEnstrophy;
         }
         spectrum_shells_initialized_m = true;
-    }
-
-    void writeStepSpectrumModeDump3D() {
-        auto oxHost = this->omega_x_hat_m.getHostMirror();
-        auto oyHost = this->omega_y_hat_m.getHostMirror();
-        auto ozHost = this->omega_z_hat_m.getHostMirror();
-        Kokkos::deep_copy(oxHost, this->omega_x_hat_m.getView());
-        Kokkos::deep_copy(oyHost, this->omega_y_hat_m.getView());
-        Kokkos::deep_copy(ozHost, this->omega_z_hat_m.getView());
-
-        auto& layout = this->omega_x_hat_m.getLayout();
-        const auto& lDom = layout.getLocalNDIndex();
-        const int nghost = this->omega_x_hat_m.getNghost();
-
-        const int Nx = this->nr_m[0];
-        const int Ny = this->nr_m[1];
-        const int Nz = this->nr_m[2];
-
-        const T Lx = this->rmax_m[0] - this->rmin_m[0];
-        const T Ly = this->rmax_m[1] - this->rmin_m[1];
-        const T Lz = this->rmax_m[2] - this->rmin_m[2];
-        const T volume = Lx * Ly * Lz;
-        const T twoPi = T(2.0 * std::acos(-1.0));
-
-        std::ostringstream localRows;
-        localRows.precision(16);
-        localRows.setf(std::ios::scientific, std::ios::floatfield);
-
-        const bool isRemeshStep =
-            this->it_m > 0
-            && remesh_freq_m > 0
-            && static_cast<int>(this->it_m) % remesh_freq_m == 0;
-        for (int i = nghost; i < static_cast<int>(oxHost.extent(0)) - nghost; ++i) {
-            for (int j = nghost; j < static_cast<int>(oxHost.extent(1)) - nghost; ++j) {
-                for (int k = nghost; k < static_cast<int>(oxHost.extent(2)) - nghost; ++k) {
-                    const int gx = i - nghost + lDom[0].first();
-                    const int gy = j - nghost + lDom[1].first();
-                    const int gz = k - nghost + lDom[2].first();
-
-                    const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                    const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                    const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
-
-                    const bool notMidX = (gx != Nx / 2);
-                    const bool notMidY = (gy != Ny / 2);
-                    const bool notMidZ = (gz != Nz / 2);
-
-                    const T kx = notMidX * twoPi * mx / Lx;
-                    const T ky = notMidY * twoPi * my / Ly;
-                    const T kz = notMidZ * twoPi * mz / Lz;
-                    const T k2 = kx * kx + ky * ky + kz * kz;
-
-                    const auto wx = k2 * oxHost(i, j, k);
-                    const auto wy = k2 * oyHost(i, j, k);
-                    const auto wz = k2 * ozHost(i, j, k);
-
-                    const double omegaAmp =
-                        wx.real() * wx.real() + wx.imag() * wx.imag()
-                        + wy.real() * wy.real() + wy.imag() * wy.imag()
-                        + wz.real() * wz.real() + wz.imag() * wz.imag();
-                    const double kmag = std::sqrt(static_cast<double>(mx) * mx
-                                                  + static_cast<double>(my) * my
-                                                  + static_cast<double>(mz) * mz);
-                    const double enstrophyDensity = 0.5 * volume * omegaAmp;
-
-                    localRows << this->method_m << "," << this->dt_m << ","
-                              << this->it_m << "," << this->time_m << ","
-                              << this->viscosity_m << "," << this->spectral_filter_m << ","
-                              << (isRemeshStep ? 1 : 0) << ","
-                              << mx << "," << my << "," << mz << "," << kmag << ","
-                              << omegaAmp << "," << enstrophyDensity << "\n";
-                }
-            }
-        }
-
-        const std::string localStr = localRows.str();
-        const int rank = ippl::Comm->rank();
-        const int ranks = ippl::Comm->size();
-        const MPI_Aint localSize = static_cast<MPI_Aint>(localStr.size());
-        std::vector<MPI_Aint> sizes(ranks, 0);
-        MPI_Gather(&localSize, 1, MPI_AINT, sizes.data(), 1, MPI_AINT, 0,
-                   ippl::Comm->getCommunicator());
-
-        std::vector<int> intSizes(ranks, 0);
-        std::vector<int> displs(ranks, 0);
-        std::vector<char> allRows;
-        if (rank == 0) {
-            long long totalSize = 0;
-            for (int r = 0; r < ranks; ++r) {
-                intSizes[r] = static_cast<int>(std::min<MPI_Aint>(
-                    sizes[r], static_cast<MPI_Aint>(std::numeric_limits<int>::max())));
-                displs[r] = static_cast<int>(totalSize);
-                totalSize += intSizes[r];
-            }
-            allRows.resize(static_cast<std::size_t>(totalSize));
-        }
-
-        MPI_Gatherv(localStr.data(), static_cast<int>(localStr.size()), MPI_CHAR,
-                    allRows.data(), intSizes.data(), displs.data(), MPI_CHAR, 0,
-                    ippl::Comm->getCommunicator());
-
-        if (rank == 0) {
-            std::ofstream out(this->diagnosticFileName("remesh_spectrum_modes_3d.csv"),
-                              spectrum_modes_initialized_m ? std::ios::app : std::ios::out);
-            if (!spectrum_modes_initialized_m) {
-                out << "method,dt,step,time,viscosity,filter,is_remesh_step,"
-                    << "kx,ky,kz,k_mag,omega_amp,enstrophy_density\n";
-            }
-            out.write(allRows.data(), static_cast<std::streamsize>(allRows.size()));
-        }
-        spectrum_modes_initialized_m = true;
     }
 
     std::vector<SpectrumShellMetrics> computeCurrentVorticitySpectrumShellMetrics3D() {
