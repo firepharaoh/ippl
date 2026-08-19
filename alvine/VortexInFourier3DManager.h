@@ -298,9 +298,9 @@ public:
         const std::string& filename = "rhs_consistency_3d.csv") {
         refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
 
         this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
@@ -652,9 +652,9 @@ public:
 
         this->computeSpectralVelocityModes3D();
         tracePipelineState3D("REMESH RECONSTRUCT AFTER BIOT SAVART");
-        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         tracePipelineState3D("REMESH RECONSTRUCT AFTER VELOCITY FILTER");
 
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
@@ -1312,9 +1312,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         IpplTimings::stopTimer(SolveTimer);
 
         IpplTimings::startTimer(PTimer);
@@ -1346,9 +1346,9 @@ public:
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->computeSpectralVelocityGradientModes3D();
 
         if (this->viscosity_m > 0.0) {
@@ -1590,9 +1590,9 @@ public:
         this->computeSpectralVelocityModes3D();
         tracePipelineState3D("AFTER BIOT SAVART");
         traceModes3D("AFTER BIOT SAVART");
-        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         tracePipelineState3D("AFTER VELOCITY FILTER");
         this->computeSpectralVelocityGradientModes3D();
         IpplTimings::stopTimer(SolveTimer);
@@ -1677,9 +1677,9 @@ public:
 
         refreshSpectralVorticityModes3D(false);
         this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralVelocityFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralVelocityFilter3D(this->uz_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
 
