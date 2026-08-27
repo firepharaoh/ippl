@@ -11,7 +11,12 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
+
+#if defined(KOKKOS_ENABLE_CUDA)
+#include <cuda_runtime_api.h>
+#endif
 
 #include "core/AlvineManager.h"
 #include "FieldSolver.hpp"
@@ -729,6 +734,15 @@ public:
 
         auto pc = this->pcontainer_m;
         const size_type old_nlocal = pc->getLocalNum();
+        traceRemeshDebug3D("REMESH PARTITION BEFORE DESTROY",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           old_nlocal);
         if (old_nlocal > 0) {
             Kokkos::View<bool*> invalid("vif_3d_remesh_invalid_particles", old_nlocal);
             Kokkos::parallel_for(
@@ -740,7 +754,25 @@ public:
             Kokkos::fence();
             pc->destroy(invalid, old_nlocal);
         }
+        traceRemeshDebug3D("REMESH AFTER DESTROY BEFORE CREATE",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           pc->getLocalNum());
         pc->create(lattice_local);
+        traceRemeshDebug3D("REMESH AFTER CREATE BEFORE PLACEMENT",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           pc->getLocalNum());
 
         const size_type nlocal = pc->getLocalNum();
 
@@ -773,10 +805,46 @@ public:
 
         Kokkos::fence();
 
+        traceRemeshDebug3D("REMESH AFTER PLACEMENT BEFORE UPDATE",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           pc->getLocalNum());
         pc->update();
+        traceRemeshDebug3D("REMESH AFTER PC UPDATE BEFORE NUFFT REBUILD",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           pc->getLocalNum());
         this->rebuildNUFFTPlans3D();
+        traceRemeshDebug3D("REMESH AFTER NUFFT REBUILD BEFORE TYPE2",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           pc->getLocalNum());
 
         sampleRemeshedParticlesFromSpectralModes3D(particle_volume);
+        traceRemeshDebug3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER COUNTS",
+                           has_local_lattice,
+                           ix_start, ix_end,
+                           iy_start, iy_end,
+                           iz_start, iz_end,
+                           nxp_local, nyp_local, nzp_local,
+                           lattice_local,
+                           old_nlocal,
+                           pc->getLocalNum());
 
         tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER");
         tracedSpectralScatter3D(false);
@@ -1046,6 +1114,121 @@ public:
                       << "div_u = " << divU << "\n"
                       << "div_omega = " << divOmega << "\n";
         }
+    }
+
+    std::pair<std::uint64_t, std::uint64_t> traceCudaMemoryInfo3D() const {
+#if defined(KOKKOS_ENABLE_CUDA)
+        size_t freeBytes = 0;
+        size_t totalBytes = 0;
+        const cudaError_t err = cudaMemGetInfo(&freeBytes, &totalBytes);
+        if (err != cudaSuccess) {
+            return {0, 0};
+        }
+        return {static_cast<std::uint64_t>(freeBytes),
+                static_cast<std::uint64_t>(totalBytes)};
+#else
+        return {0, 0};
+#endif
+    }
+
+    void traceRemeshDebug3D(const std::string& stage,
+                            const bool hasLocalLattice,
+                            const int ixStart,
+                            const int ixEnd,
+                            const int iyStart,
+                            const int iyEnd,
+                            const int izStart,
+                            const int izEnd,
+                            const unsigned nxpLocal,
+                            const unsigned nypLocal,
+                            const unsigned nzpLocal,
+                            const size_type latticeLocal,
+                            const size_type oldNlocal,
+                            const size_type currentNlocal) const {
+        if (!shouldTracePipeline3D()) {
+            return;
+        }
+
+        const int rank = ippl::Comm->rank();
+        const int ranks = ippl::Comm->size();
+        const int emptyLocal = latticeLocal == 0 ? 1 : 0;
+        const int changedLocal = oldNlocal != currentNlocal ? 1 : 0;
+        const int mismatchLocal = currentNlocal != latticeLocal ? 1 : 0;
+
+        size_type oldTotal = 0;
+        size_type oldMin = 0;
+        size_type oldMax = 0;
+        size_type latticeTotal = 0;
+        size_type latticeMin = 0;
+        size_type latticeMax = 0;
+        size_type currentTotal = 0;
+        size_type currentMin = 0;
+        size_type currentMax = 0;
+        int emptyRanks = 0;
+        int changedRanks = 0;
+        int mismatchRanks = 0;
+
+        ippl::Comm->allreduce(oldNlocal, oldTotal, 1, std::plus<size_type>());
+        ippl::Comm->allreduce(oldNlocal, oldMin, 1, std::less<size_type>());
+        ippl::Comm->allreduce(oldNlocal, oldMax, 1, std::greater<size_type>());
+        ippl::Comm->allreduce(latticeLocal, latticeTotal, 1, std::plus<size_type>());
+        ippl::Comm->allreduce(latticeLocal, latticeMin, 1, std::less<size_type>());
+        ippl::Comm->allreduce(latticeLocal, latticeMax, 1, std::greater<size_type>());
+        ippl::Comm->allreduce(currentNlocal, currentTotal, 1, std::plus<size_type>());
+        ippl::Comm->allreduce(currentNlocal, currentMin, 1, std::less<size_type>());
+        ippl::Comm->allreduce(currentNlocal, currentMax, 1, std::greater<size_type>());
+        ippl::Comm->allreduce(emptyLocal, emptyRanks, 1, std::plus<int>());
+        ippl::Comm->allreduce(changedLocal, changedRanks, 1, std::plus<int>());
+        ippl::Comm->allreduce(mismatchLocal, mismatchRanks, 1, std::plus<int>());
+
+        const auto [freeBytes, totalBytes] = traceCudaMemoryInfo3D();
+
+        if (rank == 0) {
+            std::cout << "\nREMESH_DEBUG " << stage
+                      << " step=" << this->it_m
+                      << " time=" << std::setprecision(16) << this->time_m
+                      << " ranks=" << ranks << "\n"
+                      << "global_old_particles total=" << oldTotal
+                      << " min=" << oldMin
+                      << " max=" << oldMax << "\n"
+                      << "global_lattice_particles total=" << latticeTotal
+                      << " min=" << latticeMin
+                      << " max=" << latticeMax << "\n"
+                      << "global_current_particles total=" << currentTotal
+                      << " min=" << currentMin
+                      << " max=" << currentMax << "\n"
+                      << "empty_lattice_ranks=" << emptyRanks
+                      << " changed_count_ranks=" << changedRanks
+                      << " current_lattice_mismatch_ranks=" << mismatchRanks << "\n"
+                      << "rank0_cuda_memory free_bytes=" << freeBytes
+                      << " total_bytes=" << totalBytes << "\n"
+                      << std::flush;
+        }
+
+        const bool suspicious =
+            rank == 0 || !hasLocalLattice || latticeLocal == 0
+            || oldNlocal == 0 || currentNlocal == 0
+            || oldNlocal != currentNlocal || currentNlocal != latticeLocal;
+        for (int r = 0; r < ranks; ++r) {
+            ippl::Comm->barrier();
+            if (rank == r && suspicious) {
+                std::cout << "REMESH_RANK " << stage
+                          << " rank=" << rank
+                          << " has_lattice=" << hasLocalLattice
+                          << " ix=[" << ixStart << "," << ixEnd << "]"
+                          << " iy=[" << iyStart << "," << iyEnd << "]"
+                          << " iz=[" << izStart << "," << izEnd << "]"
+                          << " local_dims=(" << nxpLocal << ","
+                          << nypLocal << "," << nzpLocal << ")"
+                          << " old_nlocal=" << oldNlocal
+                          << " lattice_local=" << latticeLocal
+                          << " current_nlocal=" << currentNlocal
+                          << " cuda_free_bytes=" << freeBytes
+                          << " cuda_total_bytes=" << totalBytes << "\n"
+                          << std::flush;
+            }
+        }
+        ippl::Comm->barrier();
     }
 
     void traceParticles3D(const std::string& stage) {
