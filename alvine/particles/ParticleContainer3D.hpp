@@ -106,7 +106,10 @@ public:
 	void setupBCs() { setBCAllPeriodic(); }
 
     private:
-       void setBCAllPeriodic() { this->setParticleBC(ippl::BC::PERIODIC); }
+       void setBCAllPeriodic() {
+           // BOUNDARY: keep particle positions periodic on every face.
+           this->setParticleBC(ippl::BC::PERIODIC);
+       }
 };
 
 #endif

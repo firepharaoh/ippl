@@ -97,6 +97,7 @@ public:
         this->it_m = 0;
         this->time_m = 0.0;
         this->decomp_m.fill(true);
+        // BOUNDARY: VIF 3D uses a fully periodic field domain for TGV.
         this->isAllPeriodic_m = true;
 
         this->setFieldContainer(std::make_shared<FieldContainer_t>(
@@ -631,36 +632,37 @@ public:
     }
 
     void remeshParticles3D() {
-        tracePipelineState3D("BEFORE REMESH");
+        traceCudaCheckpoint3D("BEFORE REMESH");
         reconstructFieldsForRemeshing3D();
+        traceCudaCheckpoint3D("AFTER REMESH RECONSTRUCT");
         remeshParticlesFromGrid3D();
         bootstrap_next_push_m = true;
         skip_next_rhs_filter_after_remesh_m = true;
         last_remesh_step_m = static_cast<int>(this->it_m + 1);
-        tracePipelineState3D("AFTER REMESH");
+        traceCudaCheckpoint3D("AFTER REMESH");
     }
 
     void reconstructFieldsForRemeshing3D() {
-        tracePipelineState3D("REMESH RECONSTRUCT BEFORE SCATTER");
+        traceCudaCheckpoint3D("REMESH RECONSTRUCT BEFORE SCATTER");
         tracedSpectralScatter3D(false);
-        tracePipelineState3D("REMESH RECONSTRUCT AFTER SCATTER");
+        traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER SCATTER");
 
         if (this->useShapeFunctionFilter()) {
             this->applyShapeFunctionToSpectralVorticityModes3D();
-            tracePipelineState3D("REMESH RECONSTRUCT AFTER SHAPE");
+            traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER SHAPE");
         }
 
         this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
-        tracePipelineState3D("REMESH RECONSTRUCT AFTER VORTICITY FILTER");
+        traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER VORTICITY FILTER");
 
         this->computeSpectralVelocityModes3D();
-        tracePipelineState3D("REMESH RECONSTRUCT AFTER BIOT SAVART");
+        traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER BIOT SAVART");
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
-        tracePipelineState3D("REMESH RECONSTRUCT AFTER VELOCITY FILTER");
+        traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER VELOCITY FILTER");
 
         // Remeshing samples these spectral modes directly with type-2 NUFFT.
         // Keep the IFFT reconstruction path out of this diagnostic/remesh path.
@@ -734,15 +736,7 @@ public:
 
         auto pc = this->pcontainer_m;
         const size_type old_nlocal = pc->getLocalNum();
-        traceRemeshDebug3D("REMESH PARTITION BEFORE DESTROY",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           old_nlocal);
+        traceCudaCheckpoint3D("REMESH PARTITION BEFORE DESTROY");
         if (old_nlocal > 0) {
             Kokkos::View<bool*> invalid("vif_3d_remesh_invalid_particles", old_nlocal);
             Kokkos::parallel_for(
@@ -754,25 +748,9 @@ public:
             Kokkos::fence();
             pc->destroy(invalid, old_nlocal);
         }
-        traceRemeshDebug3D("REMESH AFTER DESTROY BEFORE CREATE",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           pc->getLocalNum());
+        traceCudaCheckpoint3D("REMESH AFTER DESTROY BEFORE CREATE");
         pc->create(lattice_local);
-        traceRemeshDebug3D("REMESH AFTER CREATE BEFORE PLACEMENT",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           pc->getLocalNum());
+        traceCudaCheckpoint3D("REMESH AFTER CREATE BEFORE PLACEMENT");
 
         const size_type nlocal = pc->getLocalNum();
 
@@ -805,55 +783,22 @@ public:
 
         Kokkos::fence();
 
-        traceRemeshDebug3D("REMESH AFTER PLACEMENT BEFORE UPDATE",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           pc->getLocalNum());
+        traceCudaCheckpoint3D("REMESH AFTER PLACEMENT BEFORE UPDATE");
         pc->update();
-        traceRemeshDebug3D("REMESH AFTER PC UPDATE BEFORE NUFFT REBUILD",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           pc->getLocalNum());
+        traceCudaCheckpoint3D("REMESH AFTER PC UPDATE BEFORE NUFFT REBUILD");
         this->rebuildNUFFTPlans3D();
-        traceRemeshDebug3D("REMESH AFTER NUFFT REBUILD BEFORE TYPE2",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           pc->getLocalNum());
+        traceCudaCheckpoint3D("REMESH AFTER NUFFT REBUILD BEFORE TYPE2");
 
         sampleRemeshedParticlesFromSpectralModes3D(particle_volume);
-        traceRemeshDebug3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER COUNTS",
-                           has_local_lattice,
-                           ix_start, ix_end,
-                           iy_start, iy_end,
-                           iz_start, iz_end,
-                           nxp_local, nyp_local, nzp_local,
-                           lattice_local,
-                           old_nlocal,
-                           pc->getLocalNum());
+        traceCudaCheckpoint3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER");
 
-        tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER");
         tracedSpectralScatter3D(false);
-        tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING AFTER SCATTER");
+        traceCudaCheckpoint3D("REMESH AFTER TYPE2 SAMPLING AFTER SCATTER");
         // The remeshed particles were already sampled from filtered modes.
         // Applying a spectral filter again immediately after assigning them
         // compounds attenuation at every remesh event.
         this->computeSpectralVelocityModes3D();
-        tracePipelineState3D("REMESH AFTER TYPE2 SAMPLING AFTER BIOT SAVART");
+        traceCudaCheckpoint3D("REMESH AFTER TYPE2 SAMPLING AFTER BIOT SAVART");
     }
 
     void sampleRemeshedParticlesFromSpectralModes3D(const double particle_volume) {
@@ -870,24 +815,34 @@ public:
         pc->ux = 0.0;
         pc->uy = 0.0;
         pc->uz = 0.0;
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER ZERO PARTICLE SCALARS");
 
         auto oxModes = this->omega_x_hat_m.deepCopy();
         auto oyModes = this->omega_y_hat_m.deepCopy();
         auto ozModes = this->omega_z_hat_m.deepCopy();
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER COPY OMEGA MODES");
 
         recoverFourierSeriesVorticityModesForSampling3D(oxModes, oyModes, ozModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER RECOVER OMEGA MODES");
 
         this->nufftType2_mp->transform(pc->R, pc->omega_x, oxModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER OMEGA_X");
         this->nufftType2_mp->transform(pc->R, pc->omega_y, oyModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER OMEGA_Y");
         this->nufftType2_mp->transform(pc->R, pc->omega_z, ozModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER OMEGA_Z");
 
         auto uxModes = this->ux_hat_m.deepCopy();
         auto uyModes = this->uy_hat_m.deepCopy();
         auto uzModes = this->uz_hat_m.deepCopy();
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER COPY VELOCITY MODES");
 
         this->nufftType2_mp->transform(pc->R, pc->ux, uxModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER UX");
         this->nufftType2_mp->transform(pc->R, pc->uy, uyModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER UY");
         this->nufftType2_mp->transform(pc->R, pc->uz, uzModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER UZ");
 
         auto omega = pc->omega.getView();
         auto omegaX = pc->omega_x.getView();
@@ -918,6 +873,7 @@ public:
                 u(p) = P(p);
             });
         Kokkos::fence();
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER PACK SAMPLES");
     }
 
     void recoverFourierSeriesVorticityModesForSampling3D(ComplexField_t& oxModes,
@@ -976,6 +932,44 @@ public:
         return pipeline_trace_m
                && pipeline_trace_freq_m > 0
                && static_cast<int>(this->it_m) % pipeline_trace_freq_m == 0;
+    }
+
+    void traceCudaCheckpoint3D(const std::string& stage) const {
+        if (!shouldTracePipeline3D()) {
+            return;
+        }
+
+        const int rank = ippl::Comm->rank();
+        if (rank == 0) {
+            std::cout << "CUDA_CHECKPOINT_BEGIN step=" << this->it_m
+                      << " time=" << std::setprecision(16) << this->time_m
+                      << " stage=\"" << stage << "\"\n"
+                      << std::flush;
+        }
+
+#if defined(KOKKOS_ENABLE_CUDA)
+        const cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+            const auto [freeBytes, totalBytes] = traceCudaMemoryInfo3D();
+            std::cerr << "CUDA_CHECKPOINT_FAIL rank=" << rank
+                      << " step=" << this->it_m
+                      << " time=" << std::setprecision(16) << this->time_m
+                      << " stage=\"" << stage << "\""
+                      << " error=" << cudaGetErrorString(err)
+                      << " free_bytes=" << freeBytes
+                      << " total_bytes=" << totalBytes << "\n"
+                      << std::flush;
+            ippl::Comm->abort();
+        }
+#else
+        Kokkos::fence();
+#endif
+
+        if (rank == 0) {
+            std::cout << "CUDA_CHECKPOINT_OK step=" << this->it_m
+                      << " stage=\"" << stage << "\"\n"
+                      << std::flush;
+        }
     }
 
     std::array<std::array<int, 3>, 11> traceModes3D() const {
@@ -1129,106 +1123,6 @@ public:
 #else
         return {0, 0};
 #endif
-    }
-
-    void traceRemeshDebug3D(const std::string& stage,
-                            const bool hasLocalLattice,
-                            const int ixStart,
-                            const int ixEnd,
-                            const int iyStart,
-                            const int iyEnd,
-                            const int izStart,
-                            const int izEnd,
-                            const unsigned nxpLocal,
-                            const unsigned nypLocal,
-                            const unsigned nzpLocal,
-                            const size_type latticeLocal,
-                            const size_type oldNlocal,
-                            const size_type currentNlocal) const {
-        if (!shouldTracePipeline3D()) {
-            return;
-        }
-
-        const int rank = ippl::Comm->rank();
-        const int ranks = ippl::Comm->size();
-        const int emptyLocal = latticeLocal == 0 ? 1 : 0;
-        const int changedLocal = oldNlocal != currentNlocal ? 1 : 0;
-        const int mismatchLocal = currentNlocal != latticeLocal ? 1 : 0;
-
-        size_type oldTotal = 0;
-        size_type oldMin = 0;
-        size_type oldMax = 0;
-        size_type latticeTotal = 0;
-        size_type latticeMin = 0;
-        size_type latticeMax = 0;
-        size_type currentTotal = 0;
-        size_type currentMin = 0;
-        size_type currentMax = 0;
-        int emptyRanks = 0;
-        int changedRanks = 0;
-        int mismatchRanks = 0;
-
-        ippl::Comm->allreduce(oldNlocal, oldTotal, 1, std::plus<size_type>());
-        ippl::Comm->allreduce(oldNlocal, oldMin, 1, std::less<size_type>());
-        ippl::Comm->allreduce(oldNlocal, oldMax, 1, std::greater<size_type>());
-        ippl::Comm->allreduce(latticeLocal, latticeTotal, 1, std::plus<size_type>());
-        ippl::Comm->allreduce(latticeLocal, latticeMin, 1, std::less<size_type>());
-        ippl::Comm->allreduce(latticeLocal, latticeMax, 1, std::greater<size_type>());
-        ippl::Comm->allreduce(currentNlocal, currentTotal, 1, std::plus<size_type>());
-        ippl::Comm->allreduce(currentNlocal, currentMin, 1, std::less<size_type>());
-        ippl::Comm->allreduce(currentNlocal, currentMax, 1, std::greater<size_type>());
-        ippl::Comm->allreduce(emptyLocal, emptyRanks, 1, std::plus<int>());
-        ippl::Comm->allreduce(changedLocal, changedRanks, 1, std::plus<int>());
-        ippl::Comm->allreduce(mismatchLocal, mismatchRanks, 1, std::plus<int>());
-
-        const auto [freeBytes, totalBytes] = traceCudaMemoryInfo3D();
-
-        if (rank == 0) {
-            std::cout << "\nREMESH_DEBUG " << stage
-                      << " step=" << this->it_m
-                      << " time=" << std::setprecision(16) << this->time_m
-                      << " ranks=" << ranks << "\n"
-                      << "global_old_particles total=" << oldTotal
-                      << " min=" << oldMin
-                      << " max=" << oldMax << "\n"
-                      << "global_lattice_particles total=" << latticeTotal
-                      << " min=" << latticeMin
-                      << " max=" << latticeMax << "\n"
-                      << "global_current_particles total=" << currentTotal
-                      << " min=" << currentMin
-                      << " max=" << currentMax << "\n"
-                      << "empty_lattice_ranks=" << emptyRanks
-                      << " changed_count_ranks=" << changedRanks
-                      << " current_lattice_mismatch_ranks=" << mismatchRanks << "\n"
-                      << "rank0_cuda_memory free_bytes=" << freeBytes
-                      << " total_bytes=" << totalBytes << "\n"
-                      << std::flush;
-        }
-
-        const bool suspicious =
-            rank == 0 || !hasLocalLattice || latticeLocal == 0
-            || oldNlocal == 0 || currentNlocal == 0
-            || oldNlocal != currentNlocal || currentNlocal != latticeLocal;
-        for (int r = 0; r < ranks; ++r) {
-            ippl::Comm->barrier();
-            if (rank == r && suspicious) {
-                std::cout << "REMESH_RANK " << stage
-                          << " rank=" << rank
-                          << " has_lattice=" << hasLocalLattice
-                          << " ix=[" << ixStart << "," << ixEnd << "]"
-                          << " iy=[" << iyStart << "," << iyEnd << "]"
-                          << " iz=[" << izStart << "," << izEnd << "]"
-                          << " local_dims=(" << nxpLocal << ","
-                          << nypLocal << "," << nzpLocal << ")"
-                          << " old_nlocal=" << oldNlocal
-                          << " lattice_local=" << latticeLocal
-                          << " current_nlocal=" << currentNlocal
-                          << " cuda_free_bytes=" << freeBytes
-                          << " cuda_total_bytes=" << totalBytes << "\n"
-                          << std::flush;
-            }
-        }
-        ippl::Comm->barrier();
     }
 
     void traceParticles3D(const std::string& stage) {
@@ -1591,21 +1485,27 @@ public:
             IpplTimings::getTimer("spectralGradientGather");
 
         IpplTimings::startTimer(par2gridTimer);
+        traceCudaCheckpoint3D("RK4 RHS BEFORE SCATTER");
         refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
+        traceCudaCheckpoint3D("RK4 RHS AFTER SCATTER");
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
+        traceCudaCheckpoint3D("RK4 RHS AFTER BIOT SAVART");
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        traceCudaCheckpoint3D("RK4 RHS AFTER VELOCITY FILTER");
         this->computeSpectralVelocityGradientModes3D();
+        traceCudaCheckpoint3D("RK4 RHS AFTER GRADIENT MODES");
 
         if (this->viscosity_m > 0.0) {
             this->viscosity_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->computeSpectralViscosityModes3D();
+            traceCudaCheckpoint3D("RK4 RHS AFTER VISCOSITY MODES");
         }
         IpplTimings::stopTimer(SolveTimer);
 
@@ -1621,14 +1521,17 @@ public:
 
         IpplTimings::startTimer(gradientGatherTimer);
         this->spectralGatherGradientModes3D();
+        traceCudaCheckpoint3D("RK4 RHS AFTER GRADIENT GATHER");
         if (this->viscosity_m > 0.0) {
             this->spectralGatherViscosity3D();
+            traceCudaCheckpoint3D("RK4 RHS AFTER VISCOSITY GATHER");
         }
         IpplTimings::stopTimer(gradientGatherTimer);
 
         IpplTimings::startTimer(grid2parTimer);
         this->spectralGather3D();
         IpplTimings::stopTimer(grid2parTimer);
+        traceCudaCheckpoint3D("RK4 RHS AFTER VELOCITY GATHER");
     }
 
     void storeRK4OmegaRHS(typename ParticleContainer_t::particle_position_type& target) {
@@ -1679,6 +1582,7 @@ public:
             });
         Kokkos::fence();
         IpplTimings::stopTimer(stretchingTimer);
+        traceCudaCheckpoint3D("RK4 AFTER STORE OMEGA RHS");
     }
 
     void setRK4StageState(typename ParticleContainer_t::particle_position_type& baseR,
@@ -1716,6 +1620,7 @@ public:
             });
         Kokkos::fence();
         IpplTimings::stopTimer(RTimer);
+        traceCudaCheckpoint3D("RK4 AFTER SET STAGE STATE");
     }
 
     void finalizeRK4State() {
@@ -1761,6 +1666,7 @@ public:
             });
         Kokkos::fence();
         IpplTimings::stopTimer(RTimer);
+        traceCudaCheckpoint3D("RK4 AFTER FINALIZE STATE");
     }
 
     void RK4Step() {
@@ -1770,9 +1676,11 @@ public:
 
         pc->rk4_R0 = pc->R;
         pc->rk4_omega0 = pc->omega;
+        traceCudaCheckpoint3D("RK4 AFTER STORE BASE STATE");
 
         computeRK4ParticleRHS(shouldLogDiagnostics3D());
         pc->rk4_k1 = pc->P;
+        traceCudaCheckpoint3D("RK4 AFTER STORE K1 POSITION RHS");
         storeRK4OmegaRHS(pc->rk4_omega_k1);
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k1, pc->rk4_omega_k1,
@@ -1780,9 +1688,11 @@ public:
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+        traceCudaCheckpoint3D("RK4 AFTER STAGE 2 UPDATE");
 
         computeRK4ParticleRHS(false);
         pc->rk4_k2 = pc->P;
+        traceCudaCheckpoint3D("RK4 AFTER STORE K2 POSITION RHS");
         storeRK4OmegaRHS(pc->rk4_omega_k2);
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k2, pc->rk4_omega_k2,
@@ -1790,9 +1700,11 @@ public:
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+        traceCudaCheckpoint3D("RK4 AFTER STAGE 3 UPDATE");
 
         computeRK4ParticleRHS(false);
         pc->rk4_k3 = pc->P;
+        traceCudaCheckpoint3D("RK4 AFTER STORE K3 POSITION RHS");
         storeRK4OmegaRHS(pc->rk4_omega_k3);
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k3, pc->rk4_omega_k3,
@@ -1800,9 +1712,11 @@ public:
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+        traceCudaCheckpoint3D("RK4 AFTER STAGE 4 UPDATE");
 
         computeRK4ParticleRHS(false);
         pc->rk4_k4 = pc->P;
+        traceCudaCheckpoint3D("RK4 AFTER STORE K4 POSITION RHS");
         storeRK4OmegaRHS(pc->rk4_omega_k4);
 
         finalizeRK4State();
@@ -1810,6 +1724,7 @@ public:
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+        traceCudaCheckpoint3D("RK4 AFTER FINAL UPDATE");
 
         if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
             remeshParticles3D();
@@ -1834,18 +1749,22 @@ public:
         IpplTimings::startTimer(par2gridTimer);
         refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER SCATTER");
         tracePipelineState3D("AFTER SCATTER");
 
         IpplTimings::startTimer(SolveTimer);
         this->computeSpectralVelocityModes3D();
+        traceCudaCheckpoint3D("LEAPFROG AFTER BIOT SAVART");
         tracePipelineState3D("AFTER BIOT SAVART");
         traceModes3D("AFTER BIOT SAVART");
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
+        traceCudaCheckpoint3D("LEAPFROG AFTER VELOCITY FILTER");
         tracePipelineState3D("AFTER VELOCITY FILTER");
         this->computeSpectralVelocityGradientModes3D();
         IpplTimings::stopTimer(SolveTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER GRADIENT MODES");
         tracePipelineState3D("AFTER GRADIENT");
         traceModes3D("AFTER GRADIENT");
 
@@ -1862,17 +1781,20 @@ public:
         IpplTimings::startTimer(gradientGatherTimer);
         this->spectralGatherGradientModes3D();
         IpplTimings::stopTimer(gradientGatherTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER GRADIENT GATHER");
         tracePipelineState3D("AFTER GRADIENT GATHER");
 
         IpplTimings::startTimer(stretchingTimer);
         tracePipelineState3D("BEFORE STRETCHING");
         this->applyParticleVortexStretching3D();
         IpplTimings::stopTimer(stretchingTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER STRETCHING");
         tracePipelineState3D("AFTER STRETCHING");
 
         IpplTimings::startTimer(grid2parTimer);
         this->spectralGather3D();
         IpplTimings::stopTimer(grid2parTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER VELOCITY GATHER");
         tracePipelineState3D("AFTER VELOCITY GATHER");
 
         if (this->viscosity_m > 0.0) {
@@ -1880,13 +1802,17 @@ public:
             this->viscosity_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->viscosity_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
             this->computeSpectralViscosityModes3D();
+            traceCudaCheckpoint3D("LEAPFROG AFTER VISCOSITY MODES");
             tracePipelineState3D("AFTER VISCOSITY MODES");
             this->spectralGatherViscosity3D();
+            traceCudaCheckpoint3D("LEAPFROG AFTER VISCOSITY GATHER");
             tracePipelineState3D("AFTER VISCOSITY GATHER");
             this->applyParticleViscosity3D();
+            traceCudaCheckpoint3D("LEAPFROG AFTER VISCOSITY UPDATE");
             tracePipelineState3D("AFTER VISCOSITY UPDATE");
         } else if (shouldTracePipeline3D()) {
             zeroParticleViscosityForTrace3D();
+            traceCudaCheckpoint3D("LEAPFROG AFTER ZERO VISCOSITY TRACE");
             tracePipelineState3D("VISCOSITY ZERO");
         }
 
@@ -1905,11 +1831,13 @@ public:
             pc->R = R_old_temp + 2 * pc->P * this->dt_m;
         }
         IpplTimings::stopTimer(RTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER PARTICLE PUSH");
         tracePipelineState3D("AFTER PARTICLE PUSH BEFORE UPDATE");
 
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
+        traceCudaCheckpoint3D("LEAPFROG AFTER PC UPDATE");
         tracePipelineState3D("AFTER PC UPDATE");
 
         if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
