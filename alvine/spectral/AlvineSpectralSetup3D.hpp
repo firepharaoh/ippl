@@ -2,17 +2,6 @@
 #define IPPL_ALVINE_SPECTRAL_ALVINESPECTRALSETUP3D_HPP
 
 void initNUFFT3D(double tol = 1e-10) {
-    ippl::ParameterList p1, p2;
-    p1.add("tolerance", tol);
-    p2.add("tolerance", tol);
-
-    p1.add("use_finufft", false);
-    p2.add("use_finufft", false);
-    p1.add("use_upsampled_inputs", false);
-    p2.add("use_upsampled_inputs", false);
-    p1.add("spread_method", "tiled");
-    p2.add("gather_method", "atomic_sort");
-
     auto& FL   = this->fcontainer_m->getFL();
     auto& mesh = this->fcontainer_m->getMesh();
 
@@ -45,6 +34,23 @@ void initNUFFT3D(double tol = 1e-10) {
     ippl::ParameterList fftParams;
     fftParams.add("use_heffte_defaults", true);
     spectralFft_mp = std::make_shared<SpectralFft_t>(FL, fftParams);
+
+    rebuildNUFFTPlans3D(tol);
+}
+
+void rebuildNUFFTPlans3D(double tol = 1e-10) {
+    ippl::ParameterList p1, p2;
+    p1.add("tolerance", tol);
+    p2.add("tolerance", tol);
+
+    p1.add("use_finufft", false);
+    p2.add("use_finufft", false);
+    p1.add("use_upsampled_inputs", false);
+    p2.add("use_upsampled_inputs", false);
+    p1.add("spread_method", "tiled");
+    p2.add("gather_method", "atomic_sort");
+
+    auto& FL = this->fcontainer_m->getFL();
 
     nufftType1_mp =
         std::make_shared<Nufft_t>(FL, this->pcontainer_m->getLocalNum(), 1, p1);

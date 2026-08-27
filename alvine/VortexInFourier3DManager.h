@@ -730,13 +730,22 @@ public:
         size_type lattice_local = nxp_local * nyp_local * nzp_local;
 
         auto pc = this->pcontainer_m;
-        const size_type nlocal = pc->getLocalNum();
-        if (nlocal != lattice_local) {
-            throw std::runtime_error(
-                "VIF 3D remeshing cannot reuse particles because local particle count "
-                "does not match the local remesh lattice count. Rebuild NUFFT plans or "
-                "restore destroy/create remeshing for changing local particle counts.");
+        const size_type old_nlocal = pc->getLocalNum();
+        if (old_nlocal > 0) {
+            Kokkos::View<bool*> invalid("vif_3d_remesh_invalid_particles", old_nlocal);
+            Kokkos::parallel_for(
+                "mark_vif_3d_remesh_particles_invalid",
+                old_nlocal,
+                KOKKOS_LAMBDA(const size_t p) {
+                    invalid(p) = true;
+                });
+            Kokkos::fence();
+            pc->destroy(invalid, old_nlocal);
         }
+        pc->create(lattice_local);
+        this->rebuildNUFFTPlans3D();
+
+        const size_type nlocal = pc->getLocalNum();
 
         auto R_view       = pc->R.getView();
         auto R_old_view   = pc->R_old.getView();
