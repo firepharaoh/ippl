@@ -720,13 +720,11 @@ public:
         iy_end   = std::min(static_cast<int>(nyp_global - 1), iy_end);
         iz_end   = std::min(static_cast<int>(nzp_global - 1), iz_end);
 
-        if (ix_end < ix_start || iy_end < iy_start || iz_end < iz_start) {
-            return;
-        }
-
-        const unsigned nxp_local = ix_end - ix_start + 1;
-        const unsigned nyp_local = iy_end - iy_start + 1;
-        const unsigned nzp_local = iz_end - iz_start + 1;
+        const bool has_local_lattice =
+            ix_end >= ix_start && iy_end >= iy_start && iz_end >= iz_start;
+        const unsigned nxp_local = has_local_lattice ? ix_end - ix_start + 1 : 0;
+        const unsigned nyp_local = has_local_lattice ? iy_end - iy_start + 1 : 0;
+        const unsigned nzp_local = has_local_lattice ? iz_end - iz_start + 1 : 0;
         size_type lattice_local = nxp_local * nyp_local * nzp_local;
 
         auto pc = this->pcontainer_m;
@@ -743,7 +741,6 @@ public:
             pc->destroy(invalid, old_nlocal);
         }
         pc->create(lattice_local);
-        this->rebuildNUFFTPlans3D();
 
         const size_type nlocal = pc->getLocalNum();
 
@@ -775,6 +772,9 @@ public:
             });
 
         Kokkos::fence();
+
+        pc->update();
+        this->rebuildNUFFTPlans3D();
 
         sampleRemeshedParticlesFromSpectralModes3D(particle_volume);
 
