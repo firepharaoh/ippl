@@ -62,6 +62,7 @@ private:
     int last_remesh_step_m = -1;
     bool pipeline_trace_m = false;
     int pipeline_trace_freq_m = 1;
+    bool remesh_pre_scatter_positions_dumped_m = false;
 
 public:
     VortexInFourier3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -644,6 +645,7 @@ public:
 
     void reconstructFieldsForRemeshing3D() {
         traceCudaCheckpoint3D("REMESH RECONSTRUCT BEFORE SCATTER");
+        dumpRemeshPreScatterParticlePositions3D();
         tracedSpectralScatter3D(false);
         traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER SCATTER");
 
@@ -935,7 +937,7 @@ public:
     }
 
     void traceCudaCheckpoint3D(const std::string& stage) const {
-        if (!shouldTracePipeline3D()) {
+        if (!shouldTracePipeline3D() || stage.rfind("SCATTER ", 0) != 0) {
             return;
         }
 
@@ -972,6 +974,52 @@ public:
         }
     }
 
+    void dumpRemeshPreScatterParticlePositions3D() {
+        if (!shouldTracePipeline3D()
+            || remesh_pre_scatter_positions_dumped_m
+            || static_cast<int>(this->it_m) != 307) {
+            return;
+        }
+
+        auto pc = this->pcontainer_m;
+        const int rank = ippl::Comm->rank();
+        const int ranks = ippl::Comm->size();
+        const size_type nlocal = pc->getLocalNum();
+        const std::string filename =
+            this->diagnosticFileName("remesh_pre_scatter_particle_positions_step_307.csv");
+
+        if (rank == 0) {
+            std::ofstream out(filename, std::ios::out);
+            out << "method,dt,step,time,rank,local_index,x,y,z\n";
+        }
+        ippl::Comm->barrier();
+
+        auto Rhost = pc->R.getHostMirror();
+        Kokkos::deep_copy(Rhost, pc->R.getView());
+
+        for (int r = 0; r < ranks; ++r) {
+            ippl::Comm->barrier();
+            if (rank == r) {
+                std::ofstream out(filename, std::ios::app);
+                out.precision(16);
+                out.setf(std::ios::scientific, std::ios::floatfield);
+                for (size_type p = 0; p < nlocal; ++p) {
+                    out << this->method_m << "," << this->dt_m << ","
+                        << this->it_m << "," << this->time_m << ","
+                        << rank << "," << p << ","
+                        << Rhost(p)[0] << "," << Rhost(p)[1] << ","
+                        << Rhost(p)[2] << "\n";
+                }
+            }
+        }
+        ippl::Comm->barrier();
+
+        remesh_pre_scatter_positions_dumped_m = true;
+        if (rank == 0) {
+            std::cout << "WROTE " << filename << "\n" << std::flush;
+        }
+    }
+
     std::array<std::array<int, 3>, 11> traceModes3D() const {
         return {{{1, 1, 1}, {2, 1, 1}, {4, 4, 4}, {8, 8, 8},
                  {16, 16, 16}, {32, 32, 32}, {64, 64, 64},
@@ -995,6 +1043,7 @@ public:
         auto oz = pc.omega_z.getView();
         auto nlocal = pc.getLocalNum();
 
+        traceCudaCheckpoint3D("SCATTER BEFORE SPLIT OMEGA COMPONENTS");
         Kokkos::parallel_for(
             "trace_split_omega_components_3d",
             nlocal,
@@ -1003,20 +1052,25 @@ public:
                 oy(p) = omega(p)[1];
                 oz(p) = omega(p)[2];
             });
-        Kokkos::fence();
+        traceCudaCheckpoint3D("SCATTER AFTER SPLIT OMEGA COMPONENTS");
 
         this->omega_x_hat_m = Kokkos::complex<T>(0.0, 0.0);
         this->omega_y_hat_m = Kokkos::complex<T>(0.0, 0.0);
         this->omega_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
+        traceCudaCheckpoint3D("SCATTER AFTER ZERO OMEGA MODES");
 
         this->nufftType1_mp->transform(pc.R, pc.omega_x, this->omega_x_hat_m);
+        traceCudaCheckpoint3D("SCATTER AFTER TYPE1 OMEGA_X");
         this->nufftType1_mp->transform(pc.R, pc.omega_y, this->omega_y_hat_m);
+        traceCudaCheckpoint3D("SCATTER AFTER TYPE1 OMEGA_Y");
         this->nufftType1_mp->transform(pc.R, pc.omega_z, this->omega_z_hat_m);
-        traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SCATTER");
+        traceCudaCheckpoint3D("SCATTER AFTER TYPE1 OMEGA_Z");
+        // traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SCATTER");
 
         if (applyShapeFilter && this->useShapeFunctionFilter()) {
             this->applyShapeFunctionToSpectralVorticityModes3D();
-            traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SHAPE");
+            traceCudaCheckpoint3D("SCATTER AFTER SHAPE FILTER");
+            // traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SHAPE");
         }
 
         auto oxModes = this->omega_x_hat_m.getView();
@@ -1073,8 +1127,8 @@ public:
                 oyModes(i, j, k) *= invVolumeK2;
                 ozModes(i, j, k) *= invVolumeK2;
             });
-        Kokkos::fence();
-        traceModes3D("STORED AFTER 1/(VOLUME*K2)");
+        traceCudaCheckpoint3D("SCATTER AFTER PRECONDITION OMEGA MODES");
+        // traceModes3D("STORED AFTER 1/(VOLUME*K2)");
     }
 
     void tracePipelineHeader3D(const std::string& stage) const {
