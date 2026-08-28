@@ -2081,6 +2081,7 @@ private:
                && static_cast<int>(this->it_m) % diagnostics_freq_m == 0;
     }
 
+public:
     void wrapParticlePositions3D(typename ParticleContainer_t::particle_position_type& R) const {
         const auto n = this->pcontainer_m->getLocalNum();
         if (n == 0) {
@@ -2110,6 +2111,7 @@ private:
         Kokkos::fence();
     }
 
+private:
     void refreshSpectralVorticityModes3D(const bool consumeRemeshSkip) {
         const bool skipFilter =
             consumeRemeshSkip ? skip_next_rhs_filter_after_remesh_m

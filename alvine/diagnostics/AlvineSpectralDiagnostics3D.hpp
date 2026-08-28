@@ -545,7 +545,7 @@
     }
 
     double computeParticleDeformationOneNorm3D() {
-        auto& pc = *pcontainer_m;
+        auto& pc = *this->pcontainer_m;
         auto duxdx = pc.duxdx.getView();
         auto duxdy = pc.duxdy.getView();
         auto duxdz = pc.duxdz.getView();
