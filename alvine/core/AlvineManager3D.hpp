@@ -9,6 +9,7 @@
 #include <functional>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -101,6 +102,7 @@ protected:
     double spectral_3d_previous_time_m = 0.0;
     double spectral_3d_previous_dissipation_rate_m = 0.0;
     double spectral_3d_cumulative_energy_dissipation_m = 0.0;
+    double lcfl_m = 1.0;
     bool tgv_3d_diagnostics_initialized_m = false;
 
 public:
@@ -140,6 +142,8 @@ public:
     bool useRK4() const { return time_integrator_m == "rk4"; }
 
     bool useLeapFrog() const { return time_integrator_m == "leapfrog"; }
+
+    void setLCFL(const double lcfl) { lcfl_m = lcfl; }
 
     virtual void dump() { /* default does nothing */ };
 

@@ -25,6 +25,53 @@
 #include "test_cases/TaylorGreen3D.hpp"
 #include "VtkDump.hpp"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define ALVINE_CUDA_GDB_NOINLINE __attribute__((noinline, used))
+#else
+#define ALVINE_CUDA_GDB_NOINLINE
+#endif
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_checkpoint(const char* stage, int step, int rank, double time) {
+    (void)stage;
+    (void)step;
+    (void)rank;
+    (void)time;
+#if defined(__GNUC__) || defined(__clang__)
+    asm volatile("" ::: "memory");
+#endif
+}
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_before_type1_omega_x(int step, int rank, double time) {
+    alvine_vif3d_cuda_gdb_checkpoint("BEFORE TYPE1 OMEGA_X", step, rank, time);
+}
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_after_type1_omega_x(int step, int rank, double time) {
+    alvine_vif3d_cuda_gdb_checkpoint("AFTER TYPE1 OMEGA_X", step, rank, time);
+}
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_before_type1_omega_y(int step, int rank, double time) {
+    alvine_vif3d_cuda_gdb_checkpoint("BEFORE TYPE1 OMEGA_Y", step, rank, time);
+}
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_after_type1_omega_y(int step, int rank, double time) {
+    alvine_vif3d_cuda_gdb_checkpoint("AFTER TYPE1 OMEGA_Y", step, rank, time);
+}
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_before_type1_omega_z(int step, int rank, double time) {
+    alvine_vif3d_cuda_gdb_checkpoint("BEFORE TYPE1 OMEGA_Z", step, rank, time);
+}
+
+extern "C" ALVINE_CUDA_GDB_NOINLINE inline void
+alvine_vif3d_cuda_gdb_after_type1_omega_z(int step, int rank, double time) {
+    alvine_vif3d_cuda_gdb_checkpoint("AFTER TYPE1 OMEGA_Z", step, rank, time);
+}
+
 template <typename T>
 class VortexInFourier3DManager : public AlvineManager<T, 3> {
 public:
@@ -942,6 +989,8 @@ public:
         }
 
         const int rank = ippl::Comm->rank();
+        alvine_vif3d_cuda_gdb_checkpoint(stage.c_str(), static_cast<int>(this->it_m),
+                                         rank, this->time_m);
         if (rank == 0) {
             std::cout << "CUDA_CHECKPOINT_BEGIN step=" << this->it_m
                       << " time=" << std::setprecision(16) << this->time_m
@@ -972,6 +1021,8 @@ public:
                       << " stage=\"" << stage << "\"\n"
                       << std::flush;
         }
+        alvine_vif3d_cuda_gdb_checkpoint(stage.c_str(), static_cast<int>(this->it_m),
+                                         rank, this->time_m);
     }
 
     void dumpRemeshPreScatterParticlePositions3D() {
@@ -1059,11 +1110,23 @@ public:
         this->omega_z_hat_m = Kokkos::complex<T>(0.0, 0.0);
         traceCudaCheckpoint3D("SCATTER AFTER ZERO OMEGA MODES");
 
+        alvine_vif3d_cuda_gdb_before_type1_omega_x(
+            static_cast<int>(this->it_m), ippl::Comm->rank(), this->time_m);
         this->nufftType1_mp->transform(pc.R, pc.omega_x, this->omega_x_hat_m);
+        alvine_vif3d_cuda_gdb_after_type1_omega_x(
+            static_cast<int>(this->it_m), ippl::Comm->rank(), this->time_m);
         traceCudaCheckpoint3D("SCATTER AFTER TYPE1 OMEGA_X");
+        alvine_vif3d_cuda_gdb_before_type1_omega_y(
+            static_cast<int>(this->it_m), ippl::Comm->rank(), this->time_m);
         this->nufftType1_mp->transform(pc.R, pc.omega_y, this->omega_y_hat_m);
+        alvine_vif3d_cuda_gdb_after_type1_omega_y(
+            static_cast<int>(this->it_m), ippl::Comm->rank(), this->time_m);
         traceCudaCheckpoint3D("SCATTER AFTER TYPE1 OMEGA_Y");
+        alvine_vif3d_cuda_gdb_before_type1_omega_z(
+            static_cast<int>(this->it_m), ippl::Comm->rank(), this->time_m);
         this->nufftType1_mp->transform(pc.R, pc.omega_z, this->omega_z_hat_m);
+        alvine_vif3d_cuda_gdb_after_type1_omega_z(
+            static_cast<int>(this->it_m), ippl::Comm->rank(), this->time_m);
         traceCudaCheckpoint3D("SCATTER AFTER TYPE1 OMEGA_Z");
         // traceRawSpectralVorticityModes3D("RAW TYPE1 AFTER SCATTER");
 
@@ -1517,7 +1580,6 @@ public:
 
         IpplTimings::startTimer(PTimer);
         if (diagnostics) {
-            this->logSpectralDiagnostics3D();
             // this->logSpectralVorticitySpectrum3D();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
@@ -1565,7 +1627,6 @@ public:
 
         IpplTimings::startTimer(PTimer);
         if (diagnostics) {
-            this->logSpectralDiagnostics3D();
             // this->logSpectralVorticitySpectrum3D();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
@@ -1581,6 +1642,10 @@ public:
             traceCudaCheckpoint3D("RK4 RHS AFTER VISCOSITY GATHER");
         }
         IpplTimings::stopTimer(gradientGatherTimer);
+
+        if (diagnostics) {
+            this->logSpectralDiagnostics3D();
+        }
 
         IpplTimings::startTimer(grid2parTimer);
         this->spectralGather3D();
@@ -1739,6 +1804,7 @@ public:
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k1, pc->rk4_omega_k1,
                          T(0.5));
+        wrapParticlePositions3D(pc->R);
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
@@ -1751,6 +1817,7 @@ public:
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k2, pc->rk4_omega_k2,
                          T(0.5));
+        wrapParticlePositions3D(pc->R);
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
@@ -1763,6 +1830,7 @@ public:
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k3, pc->rk4_omega_k3,
                          T(1.0));
+        wrapParticlePositions3D(pc->R);
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
@@ -1775,6 +1843,7 @@ public:
 
         finalizeRK4State();
 
+        wrapParticlePositions3D(pc->R);
         IpplTimings::startTimer(updateTimer);
         pc->update();
         IpplTimings::stopTimer(updateTimer);
@@ -1824,7 +1893,6 @@ public:
 
         IpplTimings::startTimer(PTimer);
         if (shouldLogDiagnostics3D()) {
-            this->logSpectralDiagnostics3D();
             // this->logSpectralVorticitySpectrum3D();
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
@@ -1837,6 +1905,10 @@ public:
         IpplTimings::stopTimer(gradientGatherTimer);
         traceCudaCheckpoint3D("LEAPFROG AFTER GRADIENT GATHER");
         tracePipelineState3D("AFTER GRADIENT GATHER");
+
+        if (shouldLogDiagnostics3D()) {
+            this->logSpectralDiagnostics3D();
+        }
 
         IpplTimings::startTimer(stretchingTimer);
         tracePipelineState3D("BEFORE STRETCHING");
@@ -1884,6 +1956,7 @@ public:
             pc->R_old = pc->R;
             pc->R = R_old_temp + 2 * pc->P * this->dt_m;
         }
+        wrapParticlePositions3D(pc->R);
         IpplTimings::stopTimer(RTimer);
         traceCudaCheckpoint3D("LEAPFROG AFTER PARTICLE PUSH");
         tracePipelineState3D("AFTER PARTICLE PUSH BEFORE UPDATE");
@@ -2008,11 +2081,41 @@ private:
                && static_cast<int>(this->it_m) % diagnostics_freq_m == 0;
     }
 
+    void wrapParticlePositions3D(typename ParticleContainer_t::particle_position_type& R) const {
+        const auto n = this->pcontainer_m->getLocalNum();
+        if (n == 0) {
+            return;
+        }
+
+        auto rView = R.getView();
+        const T xmin = T(this->rmin_m[0]);
+        const T ymin = T(this->rmin_m[1]);
+        const T zmin = T(this->rmin_m[2]);
+        const T Lx = T(this->rmax_m[0] - this->rmin_m[0]);
+        const T Ly = T(this->rmax_m[1] - this->rmin_m[1]);
+        const T Lz = T(this->rmax_m[2] - this->rmin_m[2]);
+
+        Kokkos::parallel_for(
+            "wrap_vif_3d_particle_positions",
+            n,
+            KOKKOS_LAMBDA(const size_t p) {
+                const T sx = rView(p)[0] - xmin;
+                const T sy = rView(p)[1] - ymin;
+                const T sz = rView(p)[2] - zmin;
+
+                rView(p)[0] = xmin + sx - Lx * Kokkos::floor(sx / Lx);
+                rView(p)[1] = ymin + sy - Ly * Kokkos::floor(sy / Ly);
+                rView(p)[2] = zmin + sz - Lz * Kokkos::floor(sz / Lz);
+            });
+        Kokkos::fence();
+    }
+
     void refreshSpectralVorticityModes3D(const bool consumeRemeshSkip) {
         const bool skipFilter =
             consumeRemeshSkip ? skip_next_rhs_filter_after_remesh_m
                               : (last_remesh_step_m == static_cast<int>(this->it_m));
 
+        wrapParticlePositions3D(this->pcontainer_m->R);
         tracedSpectralScatter3D(!skipFilter);
         if (!skipFilter) {
             this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);

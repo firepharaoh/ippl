@@ -544,6 +544,53 @@
         return globalDot / std::max(globalRef2, 1e-30);
     }
 
+    double computeParticleDeformationOneNorm3D() {
+        auto& pc = *pcontainer_m;
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
+        const auto n = pc.getLocalNum();
+
+        double localMax = 0.0;
+        Kokkos::parallel_reduce(
+            "compute_particle_deformation_one_norm_3d",
+            n,
+            KOKKOS_LAMBDA(const size_t p, double& lmax) {
+                const T s11 = duxdx(p);
+                const T s22 = duydy(p);
+                const T s33 = duzdz(p);
+                const T s12 = T(0.5) * (duxdy(p) + duydx(p));
+                const T s13 = T(0.5) * (duxdz(p) + duzdx(p));
+                const T s23 = T(0.5) * (duydz(p) + duzdy(p));
+
+                const T a11 = s11 < T(0) ? -s11 : s11;
+                const T a22 = s22 < T(0) ? -s22 : s22;
+                const T a33 = s33 < T(0) ? -s33 : s33;
+                const T a12 = s12 < T(0) ? -s12 : s12;
+                const T a13 = s13 < T(0) ? -s13 : s13;
+                const T a23 = s23 < T(0) ? -s23 : s23;
+
+                const T column0 = a11 + a12 + a13;
+                const T column1 = a12 + a22 + a23;
+                const T column2 = a13 + a23 + a33;
+                const T oneNorm = Kokkos::max(column0, Kokkos::max(column1, column2));
+                if (static_cast<double>(oneNorm) > lmax) {
+                    lmax = static_cast<double>(oneNorm);
+                }
+            },
+            Kokkos::Max<double>(localMax));
+
+        double globalMax = 0.0;
+        ippl::Comm->allreduce(localMax, globalMax, 1, std::greater<double>());
+        return globalMax;
+    }
+
     void logSpectralDiagnostics3D(
         const std::string& filename = "spectral_diagnostics_3d.csv") {
         const double energy = computeSpectralEnergy3D();
@@ -554,6 +601,10 @@
             computeTGVSpectralVelocityProjectionScale3D();
         const double spectralVorticityProjectionScale =
             computeTGVSpectralVorticityProjectionScale3D();
+        const double deformationOneNorm = computeParticleDeformationOneNorm3D();
+        const double lcflDt = deformationOneNorm > 0.0
+            ? lcfl_m / deformationOneNorm
+            : std::numeric_limits<double>::infinity();
 
         const double Lx = rmax_m[0] - rmin_m[0];
         const double Ly = rmax_m[1] - rmin_m[1];
@@ -618,6 +669,7 @@
                     << "spectral_vorticity_divergence_normalized,"
                     << "spectral_velocity_projection_scale,"
                     << "spectral_vorticity_projection_scale,"
+                    << "deformation_one_norm,lcfl,lcfl_dt,"
                     << "Lx,Ly,Lz,volume\n";
             }
 
@@ -633,6 +685,9 @@
                 << vorticityDivergenceL2 << "," << vorticityDivergenceNormalized << ","
                 << spectralVelocityProjectionScale << ","
                 << spectralVorticityProjectionScale << ","
+                << deformationOneNorm << ","
+                << lcfl_m << ","
+                << lcflDt << ","
                 << Lx << "," << Ly << "," << Lz << "," << volume << "\n";
 
             Inform m("spectral_diagnostics_3d ");
@@ -654,6 +709,9 @@
               << spectralVelocityProjectionScale
               << ", spectralVorticityProjectionScale = "
               << spectralVorticityProjectionScale
+              << ", deformationOneNorm = " << deformationOneNorm
+              << ", lcfl = " << lcfl_m
+              << ", lcflDt = " << lcflDt
               << ", L = (" << Lx << ", " << Ly << ", " << Lz
               << "), volume = " << volume << endl;
         }

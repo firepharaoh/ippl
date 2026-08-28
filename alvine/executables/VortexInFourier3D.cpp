@@ -28,6 +28,7 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
+                   "[--lcfl value] "
                    "[--rhs-consistency-time time] [--remesh-spectrum-dump] "
                    "[--pipeline-trace] [--pipeline-trace-freq frequency] "
                    "[--overallocate value] [--info level]"
@@ -54,6 +55,7 @@ int main(int argc, char* argv[]) {
         std::string time_integrator = "leapfrog";
         int remesh_freq = 0;
         int diagnostics_freq = 1;
+        double lcfl = 1.0;
         double rhs_consistency_time = -1.0;
         bool remesh_spectrum_dump = false;
         bool pipeline_trace = false;
@@ -82,6 +84,8 @@ int main(int argc, char* argv[]) {
                 remesh_freq = std::atoi(argv[arg++]);
             } else if (option == "--diagnostics-freq" && arg < static_cast<unsigned>(argc)) {
                 diagnostics_freq = std::atoi(argv[arg++]);
+            } else if (option == "--lcfl" && arg < static_cast<unsigned>(argc)) {
+                lcfl = std::atof(argv[arg++]);
             } else if (option == "--rhs-consistency-time" && arg < static_cast<unsigned>(argc)) {
                 rhs_consistency_time = std::atof(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
@@ -115,6 +119,9 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--diagnostics-freq") {
                 msg << "Missing value after --diagnostics-freq" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--lcfl") {
+                msg << "Missing value after --lcfl" << endl;
                 ippl::Comm->abort();
             } else if (option == "--rhs-consistency-time") {
                 msg << "Missing value after --rhs-consistency-time" << endl;
@@ -173,6 +180,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (lcfl <= 0.0) {
+            msg << "Invalid --lcfl value " << lcfl
+                << ". Use a positive deformation CFL coefficient." << endl;
+            ippl::Comm->abort();
+        }
+
         if (pipeline_trace_freq <= 0) {
             msg << "Invalid --pipeline-trace-freq value " << pipeline_trace_freq
                 << ". Use a positive frequency." << endl;
@@ -193,6 +206,7 @@ int main(int argc, char* argv[]) {
             << " viscosity: " << viscosity
             << " Remesh frequency: " << remesh_freq
             << " Diagnostics frequency: " << diagnostics_freq
+            << " LCFL: " << lcfl
             << " RHS consistency time: " << rhs_consistency_time
             << " Remesh spectrum dump: " << (remesh_spectrum_dump ? "true" : "false")
             << " Pipeline trace: " << (pipeline_trace ? "true" : "false")
@@ -206,6 +220,7 @@ int main(int argc, char* argv[]) {
         manager.setRHSConsistencyTime(rhs_consistency_time);
         manager.setSpectrumDump(remesh_spectrum_dump);
         manager.setPipelineTrace(pipeline_trace, pipeline_trace_freq);
+        manager.setLCFL(lcfl);
         manager.pre_run();
         manager.run(manager.getNt());
 
