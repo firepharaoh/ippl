@@ -69,6 +69,7 @@ protected:
 
     double time_m;
     double dt_m;
+    double dt_file_label_m;
     Vector_t<double, Dim> rmin_m;
     Vector_t<double, Dim> rmax_m;
     Vector_t<double, Dim> origin_m;
@@ -124,6 +125,7 @@ public:
         , spectral_filter_m(spectral_filter_)
         , viscosity_m(viscosity)
         , dt_m(dt_)
+        , dt_file_label_m(dt_)
         , dt_max_m(dt_) {}
 
     ~AlvineManager3D() {}

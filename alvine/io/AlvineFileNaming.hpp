@@ -9,7 +9,7 @@
 
     std::string dtFileToken() const {
         std::ostringstream os;
-        os << std::setprecision(12) << dt_m;
+        os << std::setprecision(12) << dt_file_label_m;
         std::string token = os.str();
 
         if (token.find('.') != std::string::npos) {
