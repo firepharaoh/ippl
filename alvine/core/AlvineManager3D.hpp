@@ -102,7 +102,9 @@ protected:
     double spectral_3d_previous_time_m = 0.0;
     double spectral_3d_previous_dissipation_rate_m = 0.0;
     double spectral_3d_cumulative_energy_dissipation_m = 0.0;
+    double dt_max_m = 0.0;
     double lcfl_m = 1.0;
+    bool adaptive_lcfl_m = false;
     bool tgv_3d_diagnostics_initialized_m = false;
 
 public:
@@ -121,7 +123,8 @@ public:
         , dump_freq_m(dump_freq_)
         , spectral_filter_m(spectral_filter_)
         , viscosity_m(viscosity)
-        , dt_m(dt_) {}
+        , dt_m(dt_)
+        , dt_max_m(dt_) {}
 
     ~AlvineManager3D() {}
 
@@ -144,6 +147,8 @@ public:
     bool useLeapFrog() const { return time_integrator_m == "leapfrog"; }
 
     void setLCFL(const double lcfl) { lcfl_m = lcfl; }
+
+    void setAdaptiveLCFL(const bool enabled) { adaptive_lcfl_m = enabled; }
 
     virtual void dump() { /* default does nothing */ };
 

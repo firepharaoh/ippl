@@ -28,7 +28,8 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
-                   "[--lcfl value] "
+                   "[--lcfl value] [--adaptive-lcfl] "
+                   "[--final-time time] "
                    "[--rhs-consistency-time time] [--remesh-spectrum-dump] "
                    "[--pipeline-trace] [--pipeline-trace-freq frequency] "
                    "[--overallocate value] [--info level]"
@@ -56,6 +57,8 @@ int main(int argc, char* argv[]) {
         int remesh_freq = 0;
         int diagnostics_freq = 1;
         double lcfl = 1.0;
+        bool adaptive_lcfl = false;
+        double final_time = -1.0;
         double rhs_consistency_time = -1.0;
         bool remesh_spectrum_dump = false;
         bool pipeline_trace = false;
@@ -86,6 +89,10 @@ int main(int argc, char* argv[]) {
                 diagnostics_freq = std::atoi(argv[arg++]);
             } else if (option == "--lcfl" && arg < static_cast<unsigned>(argc)) {
                 lcfl = std::atof(argv[arg++]);
+            } else if (option == "--adaptive-lcfl") {
+                adaptive_lcfl = true;
+            } else if (option == "--final-time" && arg < static_cast<unsigned>(argc)) {
+                final_time = std::atof(argv[arg++]);
             } else if (option == "--rhs-consistency-time" && arg < static_cast<unsigned>(argc)) {
                 rhs_consistency_time = std::atof(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
@@ -122,6 +129,9 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--lcfl") {
                 msg << "Missing value after --lcfl" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--final-time") {
+                msg << "Missing value after --final-time" << endl;
                 ippl::Comm->abort();
             } else if (option == "--rhs-consistency-time") {
                 msg << "Missing value after --rhs-consistency-time" << endl;
@@ -186,6 +196,12 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
+        if (final_time <= 0.0 && final_time != -1.0) {
+            msg << "Invalid --final-time value " << final_time
+                << ". Use a positive physical time, or omit the option." << endl;
+            ippl::Comm->abort();
+        }
+
         if (pipeline_trace_freq <= 0) {
             msg << "Invalid --pipeline-trace-freq value " << pipeline_trace_freq
                 << ". Use a positive frequency." << endl;
@@ -207,6 +223,8 @@ int main(int argc, char* argv[]) {
             << " Remesh frequency: " << remesh_freq
             << " Diagnostics frequency: " << diagnostics_freq
             << " LCFL: " << lcfl
+            << " Adaptive LCFL: " << (adaptive_lcfl ? "true" : "false")
+            << " Final time: " << final_time
             << " RHS consistency time: " << rhs_consistency_time
             << " Remesh spectrum dump: " << (remesh_spectrum_dump ? "true" : "false")
             << " Pipeline trace: " << (pipeline_trace ? "true" : "false")
@@ -221,6 +239,8 @@ int main(int argc, char* argv[]) {
         manager.setSpectrumDump(remesh_spectrum_dump);
         manager.setPipelineTrace(pipeline_trace, pipeline_trace_freq);
         manager.setLCFL(lcfl);
+        manager.setAdaptiveLCFL(adaptive_lcfl);
+        manager.setFinalTime(final_time);
         manager.pre_run();
         manager.run(manager.getNt());
 

@@ -110,6 +110,7 @@ private:
     bool pipeline_trace_m = false;
     int pipeline_trace_freq_m = 1;
     bool remesh_pre_scatter_positions_dumped_m = false;
+    double final_time_m = -1.0;
 
 public:
     VortexInFourier3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -193,9 +194,26 @@ public:
         }
     }
 
+    void run(int nt) {
+        for (int it = 0; it < nt; ++it) {
+            if (reachedFinalTime3D()) {
+                break;
+            }
+
+            prepareTimestepForFinalTime3D();
+            this->pre_step();
+            this->advance();
+            this->post_step();
+        }
+    }
+
     void setRHSConsistencyTime(const double time) {
         rhs_consistency_time_m = time;
         rhs_consistency_done_m = false;
+    }
+
+    void setFinalTime(const double finalTime) {
+        final_time_m = finalTime;
     }
 
     void setSpectrumDump(const bool enabled) {
@@ -1592,7 +1610,7 @@ public:
         IpplTimings::stopTimer(grid2parTimer);
     }
 
-    void computeRK4ParticleRHS(bool diagnostics) {
+    void computeRK4ParticleRHS(bool diagnostics, bool adaptTimestep = false) {
         static IpplTimings::TimerRef PTimer = IpplTimings::getTimer("pushVelocity");
         static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
@@ -1642,6 +1660,10 @@ public:
             traceCudaCheckpoint3D("RK4 RHS AFTER VISCOSITY GATHER");
         }
         IpplTimings::stopTimer(gradientGatherTimer);
+
+        if (adaptTimestep) {
+            updateLCFLTimestep3D();
+        }
 
         if (diagnostics) {
             this->logSpectralDiagnostics3D();
@@ -1797,7 +1819,7 @@ public:
         pc->rk4_omega0 = pc->omega;
         traceCudaCheckpoint3D("RK4 AFTER STORE BASE STATE");
 
-        computeRK4ParticleRHS(shouldLogDiagnostics3D());
+        computeRK4ParticleRHS(shouldLogDiagnostics3D(), true);
         pc->rk4_k1 = pc->P;
         traceCudaCheckpoint3D("RK4 AFTER STORE K1 POSITION RHS");
         storeRK4OmegaRHS(pc->rk4_omega_k1);
@@ -1905,6 +1927,8 @@ public:
         IpplTimings::stopTimer(gradientGatherTimer);
         traceCudaCheckpoint3D("LEAPFROG AFTER GRADIENT GATHER");
         tracePipelineState3D("AFTER GRADIENT GATHER");
+
+        updateLCFLTimestep3D();
 
         if (shouldLogDiagnostics3D()) {
             this->logSpectralDiagnostics3D();
@@ -2111,7 +2135,54 @@ public:
         Kokkos::fence();
     }
 
+    void updateLCFLTimestep3D() {
+        if (!this->adaptive_lcfl_m) {
+            return;
+        }
+
+        const double deformationOneNorm = this->computeParticleDeformationOneNorm3D();
+        if (!std::isfinite(deformationOneNorm)) {
+            if (ippl::Comm->rank() == 0) {
+                std::cerr << "Invalid LCFL deformation norm at step " << this->it_m
+                          << ": " << deformationOneNorm << "\n" << std::flush;
+            }
+            ippl::Comm->abort();
+        }
+
+        const double lcflDt = deformationOneNorm > 0.0
+            ? this->lcfl_m / deformationOneNorm
+            : this->dt_max_m;
+        if (!std::isfinite(lcflDt) || lcflDt <= 0.0) {
+            if (ippl::Comm->rank() == 0) {
+                std::cerr << "Invalid LCFL timestep at step " << this->it_m
+                          << ": " << lcflDt
+                          << " from deformationOneNorm=" << deformationOneNorm
+                          << "\n" << std::flush;
+            }
+            ippl::Comm->abort();
+        }
+
+        this->dt_m = std::min(activeMaximumTimestep3D(), lcflDt);
+    }
+
 private:
+    bool reachedFinalTime3D() const {
+        return final_time_m >= 0.0 && this->time_m + 1e-14 >= final_time_m;
+    }
+
+    double activeMaximumTimestep3D() const {
+        if (final_time_m < 0.0) {
+            return this->dt_max_m;
+        }
+
+        const double remaining = final_time_m - this->time_m;
+        return std::min(this->dt_max_m, std::max(0.0, remaining));
+    }
+
+    void prepareTimestepForFinalTime3D() {
+        this->dt_m = activeMaximumTimestep3D();
+    }
+
     void refreshSpectralVorticityModes3D(const bool consumeRemeshSkip) {
         const bool skipFilter =
             consumeRemeshSkip ? skip_next_rhs_filter_after_remesh_m
