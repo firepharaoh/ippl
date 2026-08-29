@@ -130,6 +130,10 @@ public:
         IpplTimings::stopTimer(dumpTimer);
     }
 
+    void par2grid() override {}
+
+    void grid2par() override {}
+
 public:
     bool shouldLogDiagnostics3D() const {
         return diagnostics_freq_m > 0
