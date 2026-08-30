@@ -463,9 +463,11 @@ public:
 
         IpplTimings::startTimer(pushTimer);
         pushVirtualParticlesForward3D();
-        wrapParticlePositions3D(pc->R);
-        pc->update();
-        this->rebuildNUFFTPlans3D();
+        if (!this->useRK4()) {
+            wrapParticlePositions3D(pc->R);
+            pc->update();
+            this->rebuildNUFFTPlans3D();
+        }
         IpplTimings::stopTimer(pushTimer);
 
         IpplTimings::startTimer(scatterTimer);
@@ -478,6 +480,11 @@ public:
     }
 
     void pushVirtualParticlesForward3D() {
+        if (this->useRK4()) {
+            pushVirtualParticlesForwardRK4_3D();
+            return;
+        }
+
         auto pc = this->pcontainer_m;
         auto R = pc->R.getView();
         auto Rold = pc->R_old.getView();
@@ -504,6 +511,44 @@ public:
             });
         Kokkos::fence();
         leapfrog_history_valid_m = true;
+    }
+
+    void pushVirtualParticlesForwardRK4_3D() {
+        auto pc = this->pcontainer_m;
+        const T dt = T(this->dt_m);
+
+        pc->rk4_R0 = pc->R;
+        pc->rk4_k1 = pc->P;
+
+        pc->R = pc->rk4_R0 + (T(0.5) * dt) * pc->rk4_k1;
+        wrapParticlePositions3D(pc->R);
+        pc->update();
+        this->rebuildNUFFTPlans3D();
+        this->spectralGather3D();
+        pc->rk4_k2 = pc->P;
+
+        pc->R = pc->rk4_R0 + (T(0.5) * dt) * pc->rk4_k2;
+        wrapParticlePositions3D(pc->R);
+        pc->update();
+        this->rebuildNUFFTPlans3D();
+        this->spectralGather3D();
+        pc->rk4_k3 = pc->P;
+
+        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
+        wrapParticlePositions3D(pc->R);
+        pc->update();
+        this->rebuildNUFFTPlans3D();
+        this->spectralGather3D();
+        pc->rk4_k4 = pc->P;
+
+        pc->R_old = pc->rk4_R0;
+        pc->R = pc->rk4_R0
+                + (dt / T(6.0)) * (pc->rk4_k1 + T(2.0) * pc->rk4_k2
+                                   + T(2.0) * pc->rk4_k3 + pc->rk4_k4);
+        wrapParticlePositions3D(pc->R);
+        pc->update();
+        this->rebuildNUFFTPlans3D();
+        leapfrog_history_valid_m = false;
     }
 
     void updateLCFLTimestep3D() {

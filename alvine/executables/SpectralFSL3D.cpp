@@ -4,7 +4,7 @@
 //        [--dt value] [--final-time value] [--method label] [--filter 0|1|2|3]
 //        [--test-case taylor_green_3d] [--viscosity value]
 //        [--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value]
-//        [--integrator euler|leapfrog] [--no-stretching] [--overallocate value] [--info level]
+//        [--integrator euler|leapfrog|rk4] [--no-stretching] [--overallocate value] [--info level]
 
 constexpr unsigned Dim = 3;
 using T = double;
@@ -36,7 +36,7 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--final-time time] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity value] "
                    "[--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value] "
-                   "[--integrator euler|leapfrog] [--no-stretching] "
+                   "[--integrator euler|leapfrog|rk4] [--no-stretching] "
                    "[--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
@@ -130,9 +130,10 @@ int main(int argc, char* argv[]) {
             msg << "Final time must be positive, or omitted." << endl;
             ippl::Comm->abort();
         }
-        if (timeIntegrator != "euler" && timeIntegrator != "leapfrog") {
+        if (timeIntegrator != "euler" && timeIntegrator != "leapfrog"
+            && timeIntegrator != "rk4") {
             msg << "Invalid --integrator value " << timeIntegrator
-                << ". Use euler or leapfrog." << endl;
+                << ". Use euler, leapfrog, or rk4." << endl;
             ippl::Comm->abort();
         }
 
