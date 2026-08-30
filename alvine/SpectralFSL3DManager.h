@@ -27,6 +27,7 @@ private:
     int diagnostics_freq_m = 1;
     double final_time_m = -1.0;
     bool use_stretching_m = true;
+    bool leapfrog_history_valid_m = false;
 
 public:
     SpectralFSL3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -201,6 +202,7 @@ public:
 
     void resetVirtualParticlesToGridFromTGV3D() {
         createGridLatticeParticles3D();
+        leapfrog_history_valid_m = false;
 
         auto pc = this->pcontainer_m;
         auto R = pc->R.getView();
@@ -232,6 +234,7 @@ public:
     void resetVirtualParticlesToGridFromSpectralModes3D() {
         createGridLatticeParticles3D();
         sampleGridParticlesFromSpectralModes3D(particleVolume3D());
+        leapfrog_history_valid_m = false;
     }
 
     void createGridLatticeParticles3D() {
@@ -459,21 +462,7 @@ public:
         }
 
         IpplTimings::startTimer(pushTimer);
-        auto R = pc->R.getView();
-        auto Rold = pc->R_old.getView();
-        auto P = pc->P.getView();
-        const auto nlocal = pc->getLocalNum();
-        const T dt = T(this->dt_m);
-        Kokkos::parallel_for(
-            "push_sfsl3d_virtual_particles",
-            nlocal,
-            KOKKOS_LAMBDA(const size_t p) {
-                Rold(p) = R(p);
-                R(p)[0] += P(p)[0] * dt;
-                R(p)[1] += P(p)[1] * dt;
-                R(p)[2] += P(p)[2] * dt;
-            });
-        Kokkos::fence();
+        pushVirtualParticlesForward3D();
         wrapParticlePositions3D(pc->R);
         pc->update();
         this->rebuildNUFFTPlans3D();
@@ -483,9 +472,38 @@ public:
         scatterAndSolveCurrentParticles3D();
         IpplTimings::stopTimer(scatterTimer);
 
-        clearVirtualParticles3D();
         logDiagnostics3D();
+        clearVirtualParticles3D();
         resetVirtualParticlesToGridFromSpectralModes3D();
+    }
+
+    void pushVirtualParticlesForward3D() {
+        auto pc = this->pcontainer_m;
+        auto R = pc->R.getView();
+        auto Rold = pc->R_old.getView();
+        auto P = pc->P.getView();
+        const auto nlocal = pc->getLocalNum();
+        const T dt = T(this->dt_m);
+        const bool useLeapfrogPush = this->useLeapFrog() && leapfrog_history_valid_m;
+
+        Kokkos::parallel_for(
+            "push_sfsl3d_virtual_particles",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p) {
+                const auto Rn = R(p);
+                if (useLeapfrogPush) {
+                    R(p)[0] = Rold(p)[0] + T(2.0) * P(p)[0] * dt;
+                    R(p)[1] = Rold(p)[1] + T(2.0) * P(p)[1] * dt;
+                    R(p)[2] = Rold(p)[2] + T(2.0) * P(p)[2] * dt;
+                } else {
+                    R(p)[0] += P(p)[0] * dt;
+                    R(p)[1] += P(p)[1] * dt;
+                    R(p)[2] += P(p)[2] * dt;
+                }
+                Rold(p) = Rn;
+            });
+        Kokkos::fence();
+        leapfrog_history_valid_m = true;
     }
 
     void updateLCFLTimestep3D() {

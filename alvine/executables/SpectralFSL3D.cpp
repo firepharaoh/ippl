@@ -4,7 +4,7 @@
 //        [--dt value] [--final-time value] [--method label] [--filter 0|1|2|3]
 //        [--test-case taylor_green_3d] [--viscosity value]
 //        [--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value]
-//        [--no-stretching] [--overallocate value] [--info level]
+//        [--integrator euler|leapfrog] [--no-stretching] [--overallocate value] [--info level]
 
 constexpr unsigned Dim = 3;
 using T = double;
@@ -36,7 +36,8 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--final-time time] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity value] "
                    "[--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value] "
-                   "[--no-stretching] [--overallocate value] [--info level]"
+                   "[--integrator euler|leapfrog] [--no-stretching] "
+                   "[--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
         }
@@ -62,6 +63,7 @@ int main(int argc, char* argv[]) {
         bool adaptiveLCFL = false;
         double lcfl = 1.0;
         bool useStretching = true;
+        std::string timeIntegrator = "leapfrog";
 
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -79,6 +81,11 @@ int main(int argc, char* argv[]) {
                 viscosity = std::atof(argv[arg++]);
             } else if (option == "--diagnostics-freq" && arg < static_cast<unsigned>(argc)) {
                 diagnosticsFreq = std::atoi(argv[arg++]);
+            } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
+                timeIntegrator = argv[arg++];
+                std::transform(timeIntegrator.begin(), timeIntegrator.end(),
+                               timeIntegrator.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
             } else if (option == "--adaptive-lcfl") {
                 adaptiveLCFL = true;
             } else if (option == "--lcfl" && arg < static_cast<unsigned>(argc)) {
@@ -123,6 +130,11 @@ int main(int argc, char* argv[]) {
             msg << "Final time must be positive, or omitted." << endl;
             ippl::Comm->abort();
         }
+        if (timeIntegrator != "euler" && timeIntegrator != "leapfrog") {
+            msg << "Invalid --integrator value " << timeIntegrator
+                << ". Use euler or leapfrog." << endl;
+            ippl::Comm->abort();
+        }
 
         Vector_t<double, Dim> rmin = alvine::domainMinForTestCase<double, Dim>(testCase);
         Vector_t<double, Dim> rmax = alvine::domainMaxForTestCase<double, Dim>(testCase);
@@ -140,10 +152,11 @@ int main(int argc, char* argv[]) {
             << " Adaptive LCFL: " << (adaptiveLCFL ? "true" : "false")
             << " LCFL: " << lcfl
             << " Final time: " << finalTime
-            << " Stretching: " << (useStretching ? "true" : "false") << endl;
+            << " Stretching: " << (useStretching ? "true" : "false")
+            << " Time integrator: " << timeIntegrator << endl;
 
         SpectralFSL3DManager<T> manager(nt, nr, np, solver, dumpFreq, dt, method,
-                                        spectralFilter, viscosity, "euler",
+                                        spectralFilter, viscosity, timeIntegrator,
                                         rmin, rmax, origin, diagnosticsFreq);
         manager.setAdaptiveLCFL(adaptiveLCFL);
         manager.setLCFL(lcfl);
