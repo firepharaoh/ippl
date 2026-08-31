@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -28,6 +29,8 @@ private:
     double final_time_m = -1.0;
     bool use_stretching_m = true;
     bool leapfrog_history_valid_m = false;
+    bool rk4_stage_trace_m = false;
+    bool rk4_stage_trace_initialized_m = false;
 
 public:
     SpectralFSL3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -57,6 +60,10 @@ public:
 
     void setUseStretching(const bool enabled) {
         use_stretching_m = enabled;
+    }
+
+    void setRK4StageTrace(const bool enabled) {
+        rk4_stage_trace_m = enabled;
     }
 
     void pre_run() override {
@@ -547,6 +554,39 @@ public:
         }
     }
 
+    void logRK4StageSpectralState3D(const std::string& label) {
+        if (!rk4_stage_trace_m || this->it_m != 0) {
+            return;
+        }
+
+        const double energy = this->computeSpectralEnergy3D();
+        const double enstrophy = this->computeSpectralEnstrophy3D();
+
+        if (ippl::Comm->rank() == 0) {
+            Inform m("sfsl3d_rk4_stage_trace ");
+            m << label << " step = " << this->it_m
+              << ", time = " << this->time_m
+              << ", dt = " << this->dt_m
+              << ", energy = " << energy
+              << ", enstrophy = " << enstrophy << endl;
+
+            std::ofstream out(
+                this->diagnosticFileName("sfsl3d_rk4_stage_trace.csv"),
+                rk4_stage_trace_initialized_m ? std::ios::app : std::ios::out);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+
+            if (!rk4_stage_trace_initialized_m) {
+                out << "method,dt,step,time,stage,spectral_energy,spectral_enstrophy\n";
+            }
+            out << this->method_m << "," << this->dt_m << "," << this->it_m << ","
+                << this->time_m << "," << label << "," << energy << "," << enstrophy
+                << "\n";
+        }
+
+        rk4_stage_trace_initialized_m = true;
+    }
+
     void storeRK4OmegaRHS3D(typename ParticleContainer_t::particle_position_type& target) {
         static IpplTimings::TimerRef rhsTimer = IpplTimings::getTimer("rk4OmegaRHS");
 
@@ -701,25 +741,31 @@ public:
         pc->rk4_R0 = pc->R;
         pc->rk4_omega0 = pc->omega;
 
+        logRK4StageSpectralState3D("start");
+
         computeRK4ParticleRHS3D(true);
+        logRK4StageSpectralState3D("after_k1_scatter");
         pc->rk4_k1 = pc->P;
         storeRK4OmegaRHS3D(pc->rk4_omega_k1);
 
         setRK4StageState3D(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k1,
                            pc->rk4_omega_k1, T(0.5));
         computeRK4ParticleRHS3D(false);
+        logRK4StageSpectralState3D("after_k2_scatter");
         pc->rk4_k2 = pc->P;
         storeRK4OmegaRHS3D(pc->rk4_omega_k2);
 
         setRK4StageState3D(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k2,
                            pc->rk4_omega_k2, T(0.5));
         computeRK4ParticleRHS3D(false);
+        logRK4StageSpectralState3D("after_k3_scatter");
         pc->rk4_k3 = pc->P;
         storeRK4OmegaRHS3D(pc->rk4_omega_k3);
 
         setRK4StageState3D(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k3,
                            pc->rk4_omega_k3, T(1.0));
         computeRK4ParticleRHS3D(false);
+        logRK4StageSpectralState3D("after_k4_scatter");
         pc->rk4_k4 = pc->P;
         storeRK4OmegaRHS3D(pc->rk4_omega_k4);
 
@@ -729,10 +775,15 @@ public:
         IpplTimings::startTimer(scatterTimer);
         scatterAndSolveCurrentParticles3D();
         IpplTimings::stopTimer(scatterTimer);
+        logRK4StageSpectralState3D("after_final_rk4_combination");
 
         logDiagnostics3D();
         clearVirtualParticles3D();
         resetVirtualParticlesToGridFromSpectralModes3D();
+        if (rk4_stage_trace_m && this->it_m == 0) {
+            scatterAndSolveCurrentParticles3D();
+            logRK4StageSpectralState3D("after_final_scatter_remesh");
+        }
         leapfrog_history_valid_m = false;
     }
 

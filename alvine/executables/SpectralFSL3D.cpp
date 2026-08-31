@@ -4,7 +4,8 @@
 //        [--dt value] [--final-time value] [--method label] [--filter 0|1|2|3]
 //        [--test-case taylor_green_3d] [--viscosity value]
 //        [--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value]
-//        [--integrator euler|leapfrog|rk4] [--no-stretching] [--overallocate value] [--info level]
+//        [--integrator euler|leapfrog|rk4] [--rk4-stage-trace]
+//        [--no-stretching] [--overallocate value] [--info level]
 
 constexpr unsigned Dim = 3;
 using T = double;
@@ -36,7 +37,8 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--final-time time] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity value] "
                    "[--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value] "
-                   "[--integrator euler|leapfrog|rk4] [--no-stretching] "
+                   "[--integrator euler|leapfrog|rk4] [--rk4-stage-trace] "
+                   "[--no-stretching] "
                    "[--overallocate value] [--info level]"
                 << endl;
             ippl::Comm->abort();
@@ -64,6 +66,7 @@ int main(int argc, char* argv[]) {
         double lcfl = 1.0;
         bool useStretching = true;
         std::string timeIntegrator = "leapfrog";
+        bool rk4StageTrace = false;
 
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -88,6 +91,8 @@ int main(int argc, char* argv[]) {
                                [](unsigned char c) { return std::tolower(c); });
             } else if (option == "--adaptive-lcfl") {
                 adaptiveLCFL = true;
+            } else if (option == "--rk4-stage-trace") {
+                rk4StageTrace = true;
             } else if (option == "--lcfl" && arg < static_cast<unsigned>(argc)) {
                 lcfl = std::atof(argv[arg++]);
             } else if (option == "--no-stretching") {
@@ -154,7 +159,8 @@ int main(int argc, char* argv[]) {
             << " LCFL: " << lcfl
             << " Final time: " << finalTime
             << " Stretching: " << (useStretching ? "true" : "false")
-            << " Time integrator: " << timeIntegrator << endl;
+            << " Time integrator: " << timeIntegrator
+            << " RK4 stage trace: " << (rk4StageTrace ? "true" : "false") << endl;
 
         SpectralFSL3DManager<T> manager(nt, nr, np, solver, dumpFreq, dt, method,
                                         spectralFilter, viscosity, timeIntegrator,
@@ -163,6 +169,7 @@ int main(int argc, char* argv[]) {
         manager.setLCFL(lcfl);
         manager.setFinalTime(finalTime);
         manager.setUseStretching(useStretching);
+        manager.setRK4StageTrace(rk4StageTrace);
         manager.pre_run();
         manager.run(manager.getNt());
 
