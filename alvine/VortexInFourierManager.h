@@ -1,6 +1,7 @@
 #ifndef IPPL_VORTEX_IN_FOURIER_MANAGER_H
 #define IPPL_VORTEX_IN_FOURIER_MANAGER_H
 
+#include <array>
 #include <fstream>
 #include <memory>
 
@@ -34,6 +35,8 @@ public:
     Mesh_t<Dim> mesh_m;          // Store the mesh
     bool bootstrap_next_push_m = false;
     int remesh_freq_m = 0;
+    bool enstrophy_representation_check_m = false;
+    std::array<bool, 3> enstrophy_representation_logged_m = {false, false, false};
 
     // Constructor declaration
     VortexInFourierManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -59,6 +62,10 @@ public:
     }
 
     ~VortexInFourierManager() {}
+
+    void setEnstrophyRepresentationCheck(const bool enabled) {
+        enstrophy_representation_check_m = enabled;
+    }
 
     void pre_run() override {
         const std::string particlesFile = this->diagnosticFileName("particles.csv");
@@ -394,6 +401,96 @@ public:
         }
     }
 
+    double computeParticleEnstrophyFromStrengths() {
+        auto pc = this->pcontainer_m;
+
+        const unsigned nxp_global = static_cast<unsigned>(std::sqrt(this->np_m));
+        const unsigned nyp_global = this->np_m / nxp_global;
+        const T dxp = (this->rmax_m[0] - this->rmin_m[0]) / nxp_global;
+        const T dyp = (this->rmax_m[1] - this->rmin_m[1]) / nyp_global;
+        const T particleArea = dxp * dyp;
+
+        auto omega = pc->omega.getView();
+        const auto nlocal = pc->getLocalNum();
+
+        double localEnstrophy = 0.0;
+        Kokkos::parallel_reduce(
+            "vif_particle_enstrophy_from_strengths",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p, double& lsum) {
+                const T gamma = omega(p);
+                lsum += 0.5 * gamma * gamma / particleArea;
+            },
+            localEnstrophy);
+
+        double globalEnstrophy = 0.0;
+        ippl::Comm->allreduce(localEnstrophy, globalEnstrophy, 1, std::plus<double>());
+        return globalEnstrophy;
+    }
+
+    void logEnstrophyRepresentationCheck() {
+        if (!enstrophy_representation_check_m) {
+            return;
+        }
+
+        constexpr std::array<double, 3> targetTimes = {0.0, 0.1, 0.5};
+        const double tolerance = std::max(1e-12, 0.5 * std::abs(this->dt_m) + 1e-12);
+
+        int targetIndex = -1;
+        for (int i = 0; i < static_cast<int>(targetTimes.size()); ++i) {
+            if (!enstrophy_representation_logged_m[i]
+                && std::abs(this->time_m - targetTimes[i]) <= tolerance) {
+                targetIndex = i;
+                break;
+            }
+        }
+
+        if (targetIndex < 0) {
+            return;
+        }
+
+        const double particleEnstrophy = computeParticleEnstrophyFromStrengths();
+        const double spectralEnstrophy = this->computeSpectralEnstrophy();
+
+        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        const double gridEnstrophy = this->computeEnstrophy();
+
+        enstrophy_representation_logged_m[targetIndex] = true;
+
+        if (ippl::Comm->rank() == 0) {
+            const std::string fileName =
+                this->diagnosticFileName("enstrophy_representations.csv");
+            const bool writeHeader = targetIndex == 0;
+            std::ofstream out(fileName, writeHeader ? std::ios::out : std::ios::app);
+            out.precision(16);
+            out.setf(std::ios::scientific, std::ios::floatfield);
+
+            if (writeHeader) {
+                out << "method,dt,step,time,target_time,enstrophy_particles,"
+                       "enstrophy_spectral,enstrophy_grid,rel_particles_vs_spectral,"
+                       "rel_grid_vs_spectral\n";
+            }
+
+            const double denom = std::max(std::abs(spectralEnstrophy), 1e-30);
+            const double relParticle =
+                std::abs(particleEnstrophy - spectralEnstrophy) / denom;
+            const double relGrid = std::abs(gridEnstrophy - spectralEnstrophy) / denom;
+
+            out << this->method_m << "," << this->dt_m << "," << this->it_m << ","
+                << this->time_m << "," << targetTimes[targetIndex] << ","
+                << particleEnstrophy << "," << spectralEnstrophy << ","
+                << gridEnstrophy << "," << relParticle << "," << relGrid << "\n";
+
+            Inform m("enstrophy representation ");
+            m << "targetTime = " << targetTimes[targetIndex]
+              << ", particle = " << particleEnstrophy
+              << ", spectral = " << spectralEnstrophy
+              << ", grid = " << gridEnstrophy
+              << ", relParticleVsSpectral = " << relParticle
+              << ", relGridVsSpectral = " << relGrid << endl;
+        }
+    }
+
     void logVorticitySpectrum() {
         const auto spectrum = this->computeSpectralVorticitySpectrum();
 
@@ -533,6 +630,7 @@ public:
             logVorticitySpectrum();
             logDivergenceDiagnostics();
         }
+        logEnstrophyRepresentationCheck();
         IpplTimings::stopTimer(PTimer);
 
         IpplTimings::startTimer(grid2parTimer);

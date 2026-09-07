@@ -15,6 +15,9 @@
 //     --test-case = Optional test case: taylor_green_2d. Default taylor_green_2d.
 //     --filter = Optional spectral filter: 0 none, 1 shape function, 2 Hou-Li. Default 0.
 //     --integrator = Optional time integrator: leapfrog or rk4. Default leapfrog.
+//     --enstrophy-representation-check =
+//                Optional VIF diagnostic comparing particle, spectral, and reconstructed-grid
+//                enstrophy at t=0,0.1,0.5 independently of normal diagnostic frequency.
 //     ovfactor = Over-allocation factor for the buffers used in the communication. Typical
 //                values are 1.0, 2.0. Value 1.0 means no over-allocation.
 //     Example:
@@ -80,6 +83,7 @@ int main(int argc, char* argv[]) {
         int spectral_filter = 0;
         double viscosity = 0.0;
         std::string time_integrator = "leapfrog";
+        bool enstrophy_representation_check = false;
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
             if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
@@ -95,6 +99,8 @@ int main(int argc, char* argv[]) {
                 std::transform(time_integrator.begin(), time_integrator.end(),
                                time_integrator.begin(),
                                [](unsigned char c) { return std::tolower(c); });
+            } else if (option == "--enstrophy-representation-check") {
+                enstrophy_representation_check = true;
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
@@ -155,7 +161,8 @@ int main(int argc, char* argv[]) {
             << " Test case: " << test_case
             << " Spectral filter: " << spectral_filter
             << " viscosity: " << viscosity
-            << " Time integrator: " << time_integrator << endl;
+            << " Time integrator: " << time_integrator
+            << " Enstrophy representation check: " << enstrophy_representation_check << endl;
         
         // ===== CRITICAL: Create mesh and layout with proper MPI decomposition =====
         ippl::NDIndex<Dim> domain;
@@ -182,6 +189,7 @@ int main(int argc, char* argv[]) {
                                                    time_integrator, rmin, rmax, origin, FL, mesh);
 
         manager.pre_run();
+        manager.setEnstrophyRepresentationCheck(enstrophy_representation_check);
         manager.run(manager.getNt());
         
         IpplTimings::stopTimer(mainTimer);
