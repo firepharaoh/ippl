@@ -186,6 +186,7 @@ public:
         this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
         this->computeSpectralVelocityModes3D();
+        this->applySpectralVelocityViscosity3D();
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
@@ -240,7 +241,7 @@ public:
 
     void resetVirtualParticlesToGridFromSpectralModes3D() {
         createGridLatticeParticles3D();
-        sampleGridParticlesFromIfftFields3D(particleVolume3D());
+        sampleGridParticlesFromSpectralModes3D(particleVolume3D());
         leapfrog_history_valid_m = false;
     }
 
@@ -378,69 +379,6 @@ public:
         Kokkos::fence();
     }
 
-    void sampleGridParticlesFromIfftFields3D(const T particleVolume) {
-        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
-        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
-
-        auto pc = this->pcontainer_m;
-        auto R = pc->R.getView();
-        auto omega = pc->omega.getView();
-        auto omegaX = pc->omega_x.getView();
-        auto omegaY = pc->omega_y.getView();
-        auto omegaZ = pc->omega_z.getView();
-        auto P = pc->P.getView();
-        auto u = pc->u.getView();
-        auto omegaGrid = this->fcontainer_m->getOmegaField().getView();
-        auto uGrid = this->fcontainer_m->getUField().getView();
-
-        auto& FL = this->fcontainer_m->getFL();
-        const auto local = FL.getLocalNDIndex();
-        const int nghost = this->fcontainer_m->getOmegaField().getNghost();
-        const int localStartX = local[0].first();
-        const int localEndX = local[0].last();
-        const int localStartY = local[1].first();
-        const int localEndY = local[1].last();
-        const int localStartZ = local[2].first();
-        const int localEndZ = local[2].last();
-
-        const T xmin = T(this->rmin_m[0]);
-        const T ymin = T(this->rmin_m[1]);
-        const T zmin = T(this->rmin_m[2]);
-        const T invHx = T(1.0) / T(this->hr_m[0]);
-        const T invHy = T(1.0) / T(this->hr_m[1]);
-        const T invHz = T(1.0) / T(this->hr_m[2]);
-        const auto nlocal = pc->getLocalNum();
-
-        Kokkos::parallel_for(
-            "sample_sfsl3d_ifft_grid_particles",
-            nlocal,
-            KOKKOS_LAMBDA(const size_t p) {
-                int gi = static_cast<int>(Kokkos::floor((R(p)[0] - xmin) * invHx));
-                int gj = static_cast<int>(Kokkos::floor((R(p)[1] - ymin) * invHy));
-                int gk = static_cast<int>(Kokkos::floor((R(p)[2] - zmin) * invHz));
-
-                gi = gi < localStartX ? localStartX : gi;
-                gi = gi > localEndX ? localEndX : gi;
-                gj = gj < localStartY ? localStartY : gj;
-                gj = gj > localEndY ? localEndY : gj;
-                gk = gk < localStartZ ? localStartZ : gk;
-                gk = gk > localEndZ ? localEndZ : gk;
-
-                const int li = gi - localStartX + nghost;
-                const int lj = gj - localStartY + nghost;
-                const int lk = gk - localStartZ + nghost;
-
-                const auto omegaValue = omegaGrid(li, lj, lk) * particleVolume;
-                omega(p) = omegaValue;
-                omegaX(p) = omegaValue[0];
-                omegaY(p) = omegaValue[1];
-                omegaZ(p) = omegaValue[2];
-                P(p) = uGrid(li, lj, lk);
-                u(p) = P(p);
-            });
-        Kokkos::fence();
-    }
-
     void recoverPhysicalVorticityModesForSampling3D(typename AlvineManager<T, Dim>::ComplexField_t& oxModes,
                                                     typename AlvineManager<T, Dim>::ComplexField_t& oyModes,
                                                     typename AlvineManager<T, Dim>::ComplexField_t& ozModes) {
@@ -486,308 +424,6 @@ public:
         Kokkos::fence();
     }
 
-    void applyInverseCellCenteredIfftPhase3D(typename AlvineManager<T, Dim>::ComplexField_t& modes) {
-        auto view = modes.getView();
-        auto& layout = modes.getLayout();
-        const auto& lDom = layout.getLocalNDIndex();
-        const auto& domain = layout.getDomain();
-        const int nghost = modes.getNghost();
-
-        const int Nx = domain[0].length();
-        const int Ny = domain[1].length();
-        const int Nz = domain[2].length();
-        const T pi = T(std::acos(-1.0));
-
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_for(
-            "remove_sfsl3d_cell_centered_fft_phase",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(view.extent(0)) - nghost,
-                         static_cast<int>(view.extent(1)) - nghost,
-                         static_cast<int>(view.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                const int gx = i - nghost + lDom[0].first();
-                const int gy = j - nghost + lDom[1].first();
-                const int gz = k - nghost + lDom[2].first();
-
-                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
-
-                const T phase = pi * (T(mx) / T(Nx) + T(my) / T(Ny) + T(mz) / T(Nz));
-                const Kokkos::complex<T> factor(Kokkos::cos(phase), -Kokkos::sin(phase));
-                view(i, j, k) *= factor;
-            });
-        Kokkos::fence();
-    }
-
-    void preconditionPhysicalVorticityRHS3D(
-        typename AlvineManager<T, Dim>::ComplexField_t& sxModes,
-        typename AlvineManager<T, Dim>::ComplexField_t& syModes,
-        typename AlvineManager<T, Dim>::ComplexField_t& szModes) {
-        auto sx = sxModes.getView();
-        auto sy = syModes.getView();
-        auto sz = szModes.getView();
-        auto& layout = sxModes.getLayout();
-        const auto& lDom = layout.getLocalNDIndex();
-        const int nghost = sxModes.getNghost();
-
-        const int Nx = this->nr_m[0];
-        const int Ny = this->nr_m[1];
-        const int Nz = this->nr_m[2];
-        const T Lx = this->rmax_m[0] - this->rmin_m[0];
-        const T Ly = this->rmax_m[1] - this->rmin_m[1];
-        const T Lz = this->rmax_m[2] - this->rmin_m[2];
-        const T twoPi = T(2.0 * std::acos(-1.0));
-
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_for(
-            "precondition_sfsl3d_vorticity_rhs",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(sx.extent(0)) - nghost,
-                         static_cast<int>(sx.extent(1)) - nghost,
-                         static_cast<int>(sx.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                const int gx = i - nghost + lDom[0].first();
-                const int gy = j - nghost + lDom[1].first();
-                const int gz = k - nghost + lDom[2].first();
-
-                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
-
-                const bool notMidX = (gx != Nx / 2);
-                const bool notMidY = (gy != Ny / 2);
-                const bool notMidZ = (gz != Nz / 2);
-
-                const T kx = notMidX * twoPi * mx / Lx;
-                const T ky = notMidY * twoPi * my / Ly;
-                const T kz = notMidZ * twoPi * mz / Lz;
-                const T k2 = kx * kx + ky * ky + kz * kz;
-
-                if (k2 == T(0)) {
-                    sx(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
-                    sy(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
-                    sz(i, j, k) = Kokkos::complex<T>(0.0, 0.0);
-                    return;
-                }
-
-                sx(i, j, k) /= k2;
-                sy(i, j, k) /= k2;
-                sz(i, j, k) /= k2;
-            });
-        Kokkos::fence();
-    }
-
-    void addSpectralViscosityRHS3D(
-        typename AlvineManager<T, Dim>::ComplexField_t& rhsX,
-        typename AlvineManager<T, Dim>::ComplexField_t& rhsY,
-        typename AlvineManager<T, Dim>::ComplexField_t& rhsZ,
-        typename AlvineManager<T, Dim>::ComplexField_t& baseX,
-        typename AlvineManager<T, Dim>::ComplexField_t& baseY,
-        typename AlvineManager<T, Dim>::ComplexField_t& baseZ) {
-        if (this->viscosity_m <= 0.0) {
-            return;
-        }
-
-        auto rx = rhsX.getView();
-        auto ry = rhsY.getView();
-        auto rz = rhsZ.getView();
-        auto ox = baseX.getView();
-        auto oy = baseY.getView();
-        auto oz = baseZ.getView();
-        auto& layout = rhsX.getLayout();
-        const auto& lDom = layout.getLocalNDIndex();
-        const int nghost = rhsX.getNghost();
-
-        const int Nx = this->nr_m[0];
-        const int Ny = this->nr_m[1];
-        const int Nz = this->nr_m[2];
-        const T Lx = this->rmax_m[0] - this->rmin_m[0];
-        const T Ly = this->rmax_m[1] - this->rmin_m[1];
-        const T Lz = this->rmax_m[2] - this->rmin_m[2];
-        const T twoPi = T(2.0 * std::acos(-1.0));
-        const T nu = T(this->viscosity_m);
-
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_for(
-            "add_sfsl3d_spectral_viscosity_rhs",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(rx.extent(0)) - nghost,
-                         static_cast<int>(rx.extent(1)) - nghost,
-                         static_cast<int>(rx.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                const int gx = i - nghost + lDom[0].first();
-                const int gy = j - nghost + lDom[1].first();
-                const int gz = k - nghost + lDom[2].first();
-
-                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
-                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
-                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
-
-                const bool notMidX = (gx != Nx / 2);
-                const bool notMidY = (gy != Ny / 2);
-                const bool notMidZ = (gz != Nz / 2);
-
-                const T kx = notMidX * twoPi * mx / Lx;
-                const T ky = notMidY * twoPi * my / Ly;
-                const T kz = notMidZ * twoPi * mz / Lz;
-                const T k2 = kx * kx + ky * ky + kz * kz;
-
-                rx(i, j, k) += -nu * k2 * ox(i, j, k);
-                ry(i, j, k) += -nu * k2 * oy(i, j, k);
-                rz(i, j, k) += -nu * k2 * oz(i, j, k);
-            });
-        Kokkos::fence();
-    }
-
-    void computeSpectralVorticitySourceRHS3D(
-        typename AlvineManager<T, Dim>::ComplexField_t& rhsX,
-        typename AlvineManager<T, Dim>::ComplexField_t& rhsY,
-        typename AlvineManager<T, Dim>::ComplexField_t& rhsZ) {
-        auto baseX = this->omega_x_hat_m.deepCopy();
-        auto baseY = this->omega_y_hat_m.deepCopy();
-        auto baseZ = this->omega_z_hat_m.deepCopy();
-
-        rhsX = Kokkos::complex<T>(0.0, 0.0);
-        rhsY = Kokkos::complex<T>(0.0, 0.0);
-        rhsZ = Kokkos::complex<T>(0.0, 0.0);
-
-        if (use_stretching_m) {
-            this->computeSpectralVelocityGradientModes3D();
-
-            auto ox = baseX.deepCopy();
-            auto oy = baseY.deepCopy();
-            auto oz = baseZ.deepCopy();
-            recoverPhysicalVorticityModesForSampling3D(ox, oy, oz);
-
-            auto duxdx = this->duxdx_hat_m.deepCopy();
-            auto duxdy = this->duxdy_hat_m.deepCopy();
-            auto duxdz = this->duxdz_hat_m.deepCopy();
-            auto duydx = this->duydx_hat_m.deepCopy();
-            auto duydy = this->duydy_hat_m.deepCopy();
-            auto duydz = this->duydz_hat_m.deepCopy();
-            auto duzdx = this->duzdx_hat_m.deepCopy();
-            auto duzdy = this->duzdy_hat_m.deepCopy();
-            auto duzdz = this->duzdz_hat_m.deepCopy();
-
-            this->applyCellCenteredIfftPhase3D(ox);
-            this->applyCellCenteredIfftPhase3D(oy);
-            this->applyCellCenteredIfftPhase3D(oz);
-            this->applyCellCenteredIfftPhase3D(duxdx);
-            this->applyCellCenteredIfftPhase3D(duxdy);
-            this->applyCellCenteredIfftPhase3D(duxdz);
-            this->applyCellCenteredIfftPhase3D(duydx);
-            this->applyCellCenteredIfftPhase3D(duydy);
-            this->applyCellCenteredIfftPhase3D(duydz);
-            this->applyCellCenteredIfftPhase3D(duzdx);
-            this->applyCellCenteredIfftPhase3D(duzdy);
-            this->applyCellCenteredIfftPhase3D(duzdz);
-
-            this->spectralFft_mp->transform(ippl::BACKWARD, ox);
-            this->spectralFft_mp->transform(ippl::BACKWARD, oy);
-            this->spectralFft_mp->transform(ippl::BACKWARD, oz);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duxdx);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duxdy);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duxdz);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duydx);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duydy);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duydz);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duzdx);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duzdy);
-            this->spectralFft_mp->transform(ippl::BACKWARD, duzdz);
-
-            auto sx = rhsX.getView();
-            auto sy = rhsY.getView();
-            auto sz = rhsZ.getView();
-            auto oxView = ox.getView();
-            auto oyView = oy.getView();
-            auto ozView = oz.getView();
-            auto duxdxView = duxdx.getView();
-            auto duxdyView = duxdy.getView();
-            auto duxdzView = duxdz.getView();
-            auto duydxView = duydx.getView();
-            auto duydyView = duydy.getView();
-            auto duydzView = duydz.getView();
-            auto duzdxView = duzdx.getView();
-            auto duzdyView = duzdy.getView();
-            auto duzdzView = duzdz.getView();
-            const int nghost = rhsX.getNghost();
-
-            using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-            Kokkos::parallel_for(
-                "compute_sfsl3d_grid_stretching_rhs",
-                policy_type({nghost, nghost, nghost},
-                            {static_cast<int>(sx.extent(0)) - nghost,
-                             static_cast<int>(sx.extent(1)) - nghost,
-                             static_cast<int>(sx.extent(2)) - nghost}),
-                KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                    const auto omegaX = oxView(i, j, k);
-                    const auto omegaY = oyView(i, j, k);
-                    const auto omegaZ = ozView(i, j, k);
-
-                    sx(i, j, k) = omegaX * duxdxView(i, j, k)
-                                  + omegaY * duxdyView(i, j, k)
-                                  + omegaZ * duxdzView(i, j, k);
-                    sy(i, j, k) = omegaX * duydxView(i, j, k)
-                                  + omegaY * duydyView(i, j, k)
-                                  + omegaZ * duydzView(i, j, k);
-                    sz(i, j, k) = omegaX * duzdxView(i, j, k)
-                                  + omegaY * duzdyView(i, j, k)
-                                  + omegaZ * duzdzView(i, j, k);
-                });
-            Kokkos::fence();
-
-            this->spectralFft_mp->transform(ippl::FORWARD, rhsX);
-            this->spectralFft_mp->transform(ippl::FORWARD, rhsY);
-            this->spectralFft_mp->transform(ippl::FORWARD, rhsZ);
-            applyInverseCellCenteredIfftPhase3D(rhsX);
-            applyInverseCellCenteredIfftPhase3D(rhsY);
-            applyInverseCellCenteredIfftPhase3D(rhsZ);
-            preconditionPhysicalVorticityRHS3D(rhsX, rhsY, rhsZ);
-        }
-
-        addSpectralViscosityRHS3D(rhsX, rhsY, rhsZ, baseX, baseY, baseZ);
-    }
-
-    void applySpectralVorticitySourceUpdate3D() {
-        if (!use_stretching_m && this->viscosity_m <= 0.0) {
-            return;
-        }
-
-        auto rhsX = this->omega_x_hat_m.deepCopy();
-        auto rhsY = this->omega_y_hat_m.deepCopy();
-        auto rhsZ = this->omega_z_hat_m.deepCopy();
-        computeSpectralVorticitySourceRHS3D(rhsX, rhsY, rhsZ);
-
-        auto ox = this->omega_x_hat_m.getView();
-        auto oy = this->omega_y_hat_m.getView();
-        auto oz = this->omega_z_hat_m.getView();
-        auto rx = rhsX.getView();
-        auto ry = rhsY.getView();
-        auto rz = rhsZ.getView();
-        const int nghost = this->omega_x_hat_m.getNghost();
-        const T dt = T(this->dt_m);
-
-        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
-        Kokkos::parallel_for(
-            "apply_sfsl3d_spectral_vorticity_source_update",
-            policy_type({nghost, nghost, nghost},
-                        {static_cast<int>(ox.extent(0)) - nghost,
-                         static_cast<int>(ox.extent(1)) - nghost,
-                         static_cast<int>(ox.extent(2)) - nghost}),
-            KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                ox(i, j, k) += dt * rx(i, j, k);
-                oy(i, j, k) += dt * ry(i, j, k);
-                oz(i, j, k) += dt * rz(i, j, k);
-            });
-        Kokkos::fence();
-
-        this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
-    }
-
     void advectForward() {
         static IpplTimings::TimerRef solveTimer = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef gatherTimer = IpplTimings::getTimer("spectralGather");
@@ -803,23 +439,28 @@ public:
 
         IpplTimings::startTimer(solveTimer);
         this->computeSpectralVelocityModes3D();
+        this->applySpectralVelocityViscosity3D();
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
-        if (this->adaptive_lcfl_m) {
+        if (use_stretching_m || this->adaptive_lcfl_m) {
             this->computeSpectralVelocityGradientModes3D();
         }
         IpplTimings::stopTimer(solveTimer);
 
         IpplTimings::startTimer(gatherTimer);
         this->spectralGather3D();
-        if (this->adaptive_lcfl_m) {
+        if (use_stretching_m || this->adaptive_lcfl_m) {
             this->spectralGatherGradientModes3D();
         }
         IpplTimings::stopTimer(gatherTimer);
 
         if (this->adaptive_lcfl_m) {
             updateLCFLTimestep3D();
+        }
+
+        if (use_stretching_m) {
+            this->applyParticleVortexStretching3D();
         }
 
         IpplTimings::startTimer(pushTimer);
@@ -832,12 +473,6 @@ public:
         IpplTimings::startTimer(scatterTimer);
         scatterAndSolveCurrentParticles3D();
         IpplTimings::stopTimer(scatterTimer);
-
-        applySpectralVorticitySourceUpdate3D();
-        this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
 
         logDiagnostics3D();
         clearVirtualParticles3D();
@@ -873,6 +508,33 @@ public:
         leapfrog_history_valid_m = true;
     }
 
+    void computeRK4ParticleRHS3D(const bool adaptTimestep) {
+        static IpplTimings::TimerRef scatterTimer = IpplTimings::getTimer("rk4SpectralScatter");
+        static IpplTimings::TimerRef solveTimer = IpplTimings::getTimer("rk4Solve");
+        static IpplTimings::TimerRef gatherTimer = IpplTimings::getTimer("rk4SpectralGather");
+
+        IpplTimings::startTimer(scatterTimer);
+        scatterAndSolveCurrentParticles3D();
+        IpplTimings::stopTimer(scatterTimer);
+
+        IpplTimings::startTimer(solveTimer);
+        if (use_stretching_m || this->adaptive_lcfl_m) {
+            this->computeSpectralVelocityGradientModes3D();
+        }
+        IpplTimings::stopTimer(solveTimer);
+
+        IpplTimings::startTimer(gatherTimer);
+        this->spectralGather3D();
+        if (use_stretching_m || this->adaptive_lcfl_m) {
+            this->spectralGatherGradientModes3D();
+        }
+        IpplTimings::stopTimer(gatherTimer);
+
+        if (adaptTimestep && this->adaptive_lcfl_m) {
+            updateLCFLTimestep3D();
+        }
+    }
+
     void logRK4StageSpectralState3D(const std::string& label) {
         if (!rk4_stage_trace_m || this->it_m != 0) {
             return;
@@ -906,70 +568,187 @@ public:
         rk4_stage_trace_initialized_m = true;
     }
 
+    void storeRK4OmegaRHS3D(typename ParticleContainer_t::particle_position_type& target) {
+        static IpplTimings::TimerRef rhsTimer = IpplTimings::getTimer("rk4OmegaRHS");
+
+        auto& pc = *this->pcontainer_m;
+        auto omega = pc.omega.getView();
+        auto duxdx = pc.duxdx.getView();
+        auto duxdy = pc.duxdy.getView();
+        auto duxdz = pc.duxdz.getView();
+        auto duydx = pc.duydx.getView();
+        auto duydy = pc.duydy.getView();
+        auto duydz = pc.duydz.getView();
+        auto duzdx = pc.duzdx.getView();
+        auto duzdy = pc.duzdy.getView();
+        auto duzdz = pc.duzdz.getView();
+        auto rhs = target.getView();
+        const auto nlocal = pc.getLocalNum();
+        const bool useStretching = use_stretching_m;
+
+        IpplTimings::startTimer(rhsTimer);
+        Kokkos::parallel_for(
+            "store_sfsl3d_rk4_omega_rhs",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p) {
+                rhs(p)[0] = T(0.0);
+                rhs(p)[1] = T(0.0);
+                rhs(p)[2] = T(0.0);
+
+                if (useStretching) {
+                    const T omegaX = omega(p)[0];
+                    const T omegaY = omega(p)[1];
+                    const T omegaZ = omega(p)[2];
+
+                    rhs(p)[0] += omegaX * duxdx(p) + omegaY * duxdy(p)
+                                 + omegaZ * duxdz(p);
+                    rhs(p)[1] += omegaX * duydx(p) + omegaY * duydy(p)
+                                 + omegaZ * duydz(p);
+                    rhs(p)[2] += omegaX * duzdx(p) + omegaY * duzdy(p)
+                                 + omegaZ * duzdz(p);
+                }
+
+            });
+        Kokkos::fence();
+        IpplTimings::stopTimer(rhsTimer);
+    }
+
+    void setRK4StageState3D(typename ParticleContainer_t::particle_position_type& baseR,
+                            typename ParticleContainer_t::particle_position_type& baseOmega,
+                            typename ParticleContainer_t::particle_position_type& kR,
+                            typename ParticleContainer_t::particle_position_type& kOmega,
+                            const T scale) {
+        static IpplTimings::TimerRef stageTimer = IpplTimings::getTimer("rk4SetStageState");
+
+        auto& pc = *this->pcontainer_m;
+        auto R = pc.R.getView();
+        auto omega = pc.omega.getView();
+        auto omegaX = pc.omega_x.getView();
+        auto omegaY = pc.omega_y.getView();
+        auto omegaZ = pc.omega_z.getView();
+        auto baseRView = baseR.getView();
+        auto baseOmegaView = baseOmega.getView();
+        auto kRView = kR.getView();
+        auto kOmegaView = kOmega.getView();
+        const auto nlocal = pc.getLocalNum();
+        const T dtScale = scale * T(this->dt_m);
+
+        IpplTimings::startTimer(stageTimer);
+        Kokkos::parallel_for(
+            "set_sfsl3d_rk4_stage_state",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p) {
+                for (unsigned d = 0; d < Dim; ++d) {
+                    R(p)[d] = baseRView(p)[d] + dtScale * kRView(p)[d];
+                    omega(p)[d] = baseOmegaView(p)[d] + dtScale * kOmegaView(p)[d];
+                }
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
+            });
+        Kokkos::fence();
+        IpplTimings::stopTimer(stageTimer);
+
+        wrapParticlePositions3D(pc.R);
+        pc.update();
+        this->rebuildNUFFTPlans3D();
+    }
+
+    void finalizeRK4State3D() {
+        static IpplTimings::TimerRef finalizeTimer = IpplTimings::getTimer("rk4FinalizeState");
+
+        auto& pc = *this->pcontainer_m;
+        auto R = pc.R.getView();
+        auto Rold = pc.R_old.getView();
+        auto omega = pc.omega.getView();
+        auto omegaX = pc.omega_x.getView();
+        auto omegaY = pc.omega_y.getView();
+        auto omegaZ = pc.omega_z.getView();
+        auto R0 = pc.rk4_R0.getView();
+        auto omega0 = pc.rk4_omega0.getView();
+        auto kR1 = pc.rk4_k1.getView();
+        auto kR2 = pc.rk4_k2.getView();
+        auto kR3 = pc.rk4_k3.getView();
+        auto kR4 = pc.rk4_k4.getView();
+        auto kOmega1 = pc.rk4_omega_k1.getView();
+        auto kOmega2 = pc.rk4_omega_k2.getView();
+        auto kOmega3 = pc.rk4_omega_k3.getView();
+        auto kOmega4 = pc.rk4_omega_k4.getView();
+        const auto nlocal = pc.getLocalNum();
+        const T sixthDt = T(this->dt_m) / T(6.0);
+
+        IpplTimings::startTimer(finalizeTimer);
+        Kokkos::parallel_for(
+            "finalize_sfsl3d_rk4_state",
+            nlocal,
+            KOKKOS_LAMBDA(const size_t p) {
+                Rold(p) = R0(p);
+                for (unsigned d = 0; d < Dim; ++d) {
+                    R(p)[d] = R0(p)[d]
+                              + sixthDt * (kR1(p)[d] + T(2.0) * kR2(p)[d]
+                                           + T(2.0) * kR3(p)[d] + kR4(p)[d]);
+                    omega(p)[d] = omega0(p)[d]
+                                  + sixthDt * (kOmega1(p)[d] + T(2.0) * kOmega2(p)[d]
+                                               + T(2.0) * kOmega3(p)[d]
+                                               + kOmega4(p)[d]);
+                }
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
+            });
+        Kokkos::fence();
+        IpplTimings::stopTimer(finalizeTimer);
+
+        wrapParticlePositions3D(pc.R);
+        pc.update();
+        this->rebuildNUFFTPlans3D();
+    }
+
     void advectForwardRK4_3D() {
         static IpplTimings::TimerRef rk4Timer = IpplTimings::getTimer("sfsl3dRK4");
         static IpplTimings::TimerRef scatterTimer = IpplTimings::getTimer("spectralScatter");
 
         auto pc = this->pcontainer_m;
-        const T dt = T(this->dt_m);
 
         IpplTimings::startTimer(rk4Timer);
         pc->rk4_R0 = pc->R;
+        pc->rk4_omega0 = pc->omega;
 
         logRK4StageSpectralState3D("start");
 
-        this->spectralGather3D();
-        if (this->adaptive_lcfl_m) {
-            this->computeSpectralVelocityGradientModes3D();
-            this->spectralGatherGradientModes3D();
-            updateLCFLTimestep3D();
-        }
-        logRK4StageSpectralState3D("after_k1_velocity_eval");
+        computeRK4ParticleRHS3D(true);
+        logRK4StageSpectralState3D("after_k1_scatter");
         pc->rk4_k1 = pc->P;
+        storeRK4OmegaRHS3D(pc->rk4_omega_k1);
 
-        pc->R = pc->rk4_R0 + (T(0.5) * dt) * pc->rk4_k1;
-        wrapParticlePositions3D(pc->R);
-        pc->update();
-        this->rebuildNUFFTPlans3D();
-        this->spectralGather3D();
-        logRK4StageSpectralState3D("after_k2_velocity_eval");
+        setRK4StageState3D(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k1,
+                           pc->rk4_omega_k1, T(0.5));
+        computeRK4ParticleRHS3D(false);
+        logRK4StageSpectralState3D("after_k2_scatter");
         pc->rk4_k2 = pc->P;
+        storeRK4OmegaRHS3D(pc->rk4_omega_k2);
 
-        pc->R = pc->rk4_R0 + (T(0.5) * dt) * pc->rk4_k2;
-        wrapParticlePositions3D(pc->R);
-        pc->update();
-        this->rebuildNUFFTPlans3D();
-        this->spectralGather3D();
-        logRK4StageSpectralState3D("after_k3_velocity_eval");
+        setRK4StageState3D(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k2,
+                           pc->rk4_omega_k2, T(0.5));
+        computeRK4ParticleRHS3D(false);
+        logRK4StageSpectralState3D("after_k3_scatter");
         pc->rk4_k3 = pc->P;
+        storeRK4OmegaRHS3D(pc->rk4_omega_k3);
 
-        pc->R = pc->rk4_R0 + dt * pc->rk4_k3;
-        wrapParticlePositions3D(pc->R);
-        pc->update();
-        this->rebuildNUFFTPlans3D();
-        this->spectralGather3D();
-        logRK4StageSpectralState3D("after_k4_velocity_eval");
+        setRK4StageState3D(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k3,
+                           pc->rk4_omega_k3, T(1.0));
+        computeRK4ParticleRHS3D(false);
+        logRK4StageSpectralState3D("after_k4_scatter");
         pc->rk4_k4 = pc->P;
+        storeRK4OmegaRHS3D(pc->rk4_omega_k4);
 
-        pc->R_old = pc->rk4_R0;
-        pc->R = pc->rk4_R0
-                + (dt / T(6.0)) * (pc->rk4_k1 + T(2.0) * pc->rk4_k2
-                                   + T(2.0) * pc->rk4_k3 + pc->rk4_k4);
-        wrapParticlePositions3D(pc->R);
-        pc->update();
-        this->rebuildNUFFTPlans3D();
+        finalizeRK4State3D();
         IpplTimings::stopTimer(rk4Timer);
 
         IpplTimings::startTimer(scatterTimer);
         scatterAndSolveCurrentParticles3D();
         IpplTimings::stopTimer(scatterTimer);
         logRK4StageSpectralState3D("after_final_rk4_combination");
-
-        applySpectralVorticitySourceUpdate3D();
-        this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
 
         logDiagnostics3D();
         clearVirtualParticles3D();

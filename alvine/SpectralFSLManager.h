@@ -39,6 +39,7 @@ public:
                         double dt_ = 0.05,
                         std::string method_ = "sfsl",
                         int spectral_filter_ = 0,
+                        double viscosity_ = 0.0,
                         std::string time_integrator_ = "leapfrog",
                         Vector_t<double, Dim> rmin_ = 0.0,
                         Vector_t<double, Dim> rmax_ = 10.0,
@@ -46,7 +47,7 @@ public:
                         FieldLayout_t<Dim>& FL_ = nullptr,
                         Mesh_t<Dim>& mesh_ = nullptr)
         : AlvineManager<T, Dim>(nt_, nr_, np_, solver_, dump_freq_, dt_, method_,
-                                spectral_filter_, 0.0, time_integrator_) {
+                                spectral_filter_, viscosity_, time_integrator_) {
         this->rmin_m   = rmin_;
         this->rmax_m   = rmax_;
         this->origin_m = origin_;
@@ -298,6 +299,16 @@ void initializeVirtualParticles(){
     );
 
     Kokkos::fence();
+}
+
+void prepareViscousVelocityFieldForPush() {
+    this->computeSpectralVelocityModes();
+    this->applySpectralVelocityViscosity2D();
+    if (this->useHouLiFilter()) {
+        this->Hou_Li_filter(this->ux_hat_m);
+        this->Hou_Li_filter(this->uy_hat_m);
+    }
+    this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
 }
 
 
@@ -640,6 +651,7 @@ void clearVirtualParticles() {
         static IpplTimings::TimerRef SolveTimer    = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("par2grid");
 
+        prepareViscousVelocityFieldForPush();
         initializeVirtualParticles();
 
         IpplTimings::startTimer(RTimer);
@@ -655,6 +667,7 @@ void clearVirtualParticles() {
             this->Hou_Li_filter(this->omega_hat_m);
         }
         this->computeSpectralVelocityModes();
+        this->applySpectralVelocityViscosity2D();
         if (this->useHouLiFilter()) {
             this->Hou_Li_filter(this->ux_hat_m);
             this->Hou_Li_filter(this->uy_hat_m);
@@ -684,6 +697,7 @@ void clearVirtualParticles() {
         // saved vorticity before creating/remapping virtual particles.
                 
         // 2. Create virtual particles from omega^n
+        prepareViscousVelocityFieldForPush();
         initializeVirtualParticles();
 
         // 3. Push particles using u^n
@@ -703,6 +717,7 @@ void clearVirtualParticles() {
             this->Hou_Li_filter(this->omega_hat_m);
         }
         this->computeSpectralVelocityModes();
+        this->applySpectralVelocityViscosity2D();
         if (this->useHouLiFilter()) {
             this->Hou_Li_filter(this->ux_hat_m);
             this->Hou_Li_filter(this->uy_hat_m);

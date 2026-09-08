@@ -103,6 +103,61 @@
       computeSpectralVelocityModes2D();
     }
 
+    void applySpectralVelocityViscosity2D() {
+      if constexpr (Dim == 2) {
+        if (viscosity_m <= 0.0 || dt_m <= 0.0) {
+          return;
+        }
+
+        auto ux = ux_hat_m.getView();
+        auto uy = uy_hat_m.getView();
+
+        auto& layout = ux_hat_m.getLayout();
+        auto& mesh = ux_hat_m.get_mesh();
+        const auto& lDom = layout.getLocalNDIndex();
+        const auto& domain = layout.getDomain();
+        const auto& dx = mesh.getMeshSpacing();
+        const int nghost = ux_hat_m.getNghost();
+
+        const int Nx = domain[0].length();
+        const int Ny = domain[1].length();
+        const T Lx = dx[0] * Nx;
+        const T Ly = dx[1] * Ny;
+        const T twoPi = T(2.0 * std::acos(-1.0));
+        const T nu = T(viscosity_m);
+        const T dt = T(dt_m);
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+        Kokkos::parallel_for(
+            "apply_spectral_velocity_viscosity_2d",
+            policy_type({nghost, nghost},
+                        {static_cast<int>(ux.extent(0)) - nghost,
+                         static_cast<int>(ux.extent(1)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j) {
+              const int gx = i - nghost + lDom[0].first();
+              const int gy = j - nghost + lDom[1].first();
+
+              const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+              const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+
+              const bool notMidX = (gx != Nx / 2);
+              const bool notMidY = (gy != Ny / 2);
+
+              const T kx = notMidX * twoPi * mx / Lx;
+              const T ky = notMidY * twoPi * my / Ly;
+              const T k2 = kx * kx + ky * ky;
+              const T viscousFactor = Kokkos::exp(-nu * k2 * dt);
+
+              ux(i, j) *= viscousFactor;
+              uy(i, j) *= viscousFactor;
+            });
+        Kokkos::fence();
+      } else {
+        throw std::runtime_error(
+            "AlvineManager::applySpectralVelocityViscosity2D is implemented for 2D only");
+      }
+    }
+
     void spectralGather2D() {
         if constexpr (Dim == 2) {
             if (!nufftType2_mp) {

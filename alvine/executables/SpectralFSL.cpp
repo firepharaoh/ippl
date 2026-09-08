@@ -2,6 +2,7 @@
 // Usage:
 //   srun ./SpectralFSL <nx> <ny> <Np_unused> <Nt> <stype> <dump_freq> [--dt value]
 //        [--method label] [--test-case taylor_green_2d] [--filter 0|1|2]
+//        [--viscosity value]
 //        [--integrator leapfrog|rk4] --overallocate 1.0 --info 5
 
 constexpr unsigned Dim = 2;
@@ -54,6 +55,7 @@ int main(int argc, char* argv[]) {
         std::string method = "sfsl";
         std::string test_case = "taylor_green_2d";
         int spectral_filter = 0;
+        double viscosity = 0.0;
         std::string time_integrator = "leapfrog";
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
@@ -65,6 +67,8 @@ int main(int argc, char* argv[]) {
                 test_case = alvine::normalizeTestCaseName(argv[arg++]);
             } else if (option == "--filter" && arg < static_cast<unsigned>(argc)) {
                 spectral_filter = std::atoi(argv[arg++]);
+            } else if (option == "--viscosity" && arg < static_cast<unsigned>(argc)) {
+                viscosity = std::atof(argv[arg++]);
             } else if (option == "--integrator" && arg < static_cast<unsigned>(argc)) {
                 time_integrator = argv[arg++];
                 std::transform(time_integrator.begin(), time_integrator.end(),
@@ -82,6 +86,9 @@ int main(int argc, char* argv[]) {
             } else if (option == "--filter") {
                 msg << "Missing value after --filter" << endl;
                 ippl::Comm->abort();
+            } else if (option == "--viscosity") {
+                msg << "Missing value after --viscosity" << endl;
+                ippl::Comm->abort();
             } else if (option == "--integrator") {
                 msg << "Missing value after --integrator" << endl;
                 ippl::Comm->abort();
@@ -91,6 +98,10 @@ int main(int argc, char* argv[]) {
         if (spectral_filter < 0 || spectral_filter > 2) {
             msg << "Invalid --filter value " << spectral_filter
                 << ". Use 0:no filter, 1:shape function, 2:Hou-Li." << endl;
+            ippl::Comm->abort();
+        }
+        if (viscosity < 0.0) {
+            msg << "Viscosity must be non-negative." << endl;
             ippl::Comm->abort();
         }
 
@@ -112,6 +123,7 @@ int main(int argc, char* argv[]) {
             << " Method: " << method
             << " Test case: " << test_case
             << " Spectral filter: " << spectral_filter
+            << " viscosity: " << viscosity
             << " Time integrator: " << time_integrator << endl;
 
         ippl::NDIndex<Dim> domain;
@@ -141,6 +153,7 @@ int main(int argc, char* argv[]) {
             dt,
             method,
             spectral_filter,
+            viscosity,
             time_integrator,
             rmin,
             rmax,
