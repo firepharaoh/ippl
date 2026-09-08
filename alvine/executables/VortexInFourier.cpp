@@ -14,6 +14,8 @@
 //     --method = Optional method label used in diagnostic CSV filenames. Default vif.
 //     --test-case = Optional test case: taylor_green_2d. Default taylor_green_2d.
 //     --filter = Optional spectral filter: 0 none, 1 shape function, 2 Hou-Li. Default 0.
+//     --hou-li-alpha = Optional Hou-Li alpha. Default 36.
+//     --hou-li-exponent = Optional Hou-Li exponent. Default 36.
 //     --integrator = Optional time integrator: leapfrog or rk4. Default leapfrog.
 //     --enstrophy-representation-check =
 //                Optional VIF diagnostic comparing particle, spectral, and reconstructed-grid
@@ -84,6 +86,8 @@ int main(int argc, char* argv[]) {
         double viscosity = 0.0;
         std::string time_integrator = "leapfrog";
         bool enstrophy_representation_check = false;
+        double hou_li_alpha = 36.0;
+        int hou_li_exponent = 36;
         while (arg < static_cast<unsigned>(argc)) {
             const std::string option = argv[arg++];
             if (option == "--dt" && arg < static_cast<unsigned>(argc)) {
@@ -101,6 +105,10 @@ int main(int argc, char* argv[]) {
                                [](unsigned char c) { return std::tolower(c); });
             } else if (option == "--enstrophy-representation-check") {
                 enstrophy_representation_check = true;
+            } else if (option == "--hou-li-alpha" && arg < static_cast<unsigned>(argc)) {
+                hou_li_alpha = std::atof(argv[arg++]);
+            } else if (option == "--hou-li-exponent" && arg < static_cast<unsigned>(argc)) {
+                hou_li_exponent = std::atoi(argv[arg++]);
             } else if (option == "--dt") {
                 msg << "Missing value after --dt" << endl;
                 ippl::Comm->abort();
@@ -115,6 +123,12 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--integrator") {
                 msg << "Missing value after --integrator" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--hou-li-alpha") {
+                msg << "Missing value after --hou-li-alpha" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--hou-li-exponent") {
+                msg << "Missing value after --hou-li-exponent" << endl;
                 ippl::Comm->abort();
             } else if (option == "--viscosity" && arg < static_cast<unsigned>(argc)) {
                 viscosity = std::atof(argv[arg++]);
@@ -154,6 +168,18 @@ int main(int argc, char* argv[]) {
                 << ". Use leapfrog or rk4." << endl;
             ippl::Comm->abort();
         }
+
+        if (hou_li_alpha < 0.0) {
+            msg << "Invalid --hou-li-alpha value " << hou_li_alpha
+                << ". Use a non-negative value." << endl;
+            ippl::Comm->abort();
+        }
+
+        if (hou_li_exponent <= 0) {
+            msg << "Invalid --hou-li-exponent value " << hou_li_exponent
+                << ". Use a positive integer." << endl;
+            ippl::Comm->abort();
+        }
         
         msg << " Grid size: " << nr << " No. of particles: " << np
             << " No. of time steps: " << nt << " dt: " << dt
@@ -162,6 +188,8 @@ int main(int argc, char* argv[]) {
             << " Spectral filter: " << spectral_filter
             << " viscosity: " << viscosity
             << " Time integrator: " << time_integrator
+            << " Hou-Li alpha: " << hou_li_alpha
+            << " Hou-Li exponent: " << hou_li_exponent
             << " Enstrophy representation check: " << enstrophy_representation_check << endl;
         
         // ===== CRITICAL: Create mesh and layout with proper MPI decomposition =====
@@ -188,6 +216,7 @@ int main(int argc, char* argv[]) {
                                                    dt, method, spectral_filter, viscosity,
                                                    time_integrator, rmin, rmax, origin, FL, mesh);
 
+        manager.setHouLiFilterParameters(hou_li_alpha, hou_li_exponent);
         manager.pre_run();
         manager.setEnstrophyRepresentationCheck(enstrophy_representation_check);
         manager.run(manager.getNt());

@@ -106,6 +106,8 @@ protected:
     double dt_max_m = 0.0;
     double lcfl_m = 1.0;
     bool adaptive_lcfl_m = false;
+    double hou_li_alpha_m = 36.0;
+    int hou_li_exponent_m = 36;
     bool tgv_3d_diagnostics_initialized_m = false;
 
 public:
@@ -143,6 +145,11 @@ public:
     bool useHouLiFilter() const { return spectral_filter_m == 2; }
 
     bool useTwoThirdsFilter() const { return spectral_filter_m == 3; }
+
+    void setHouLiFilterParameters(const double alpha, const int exponent) {
+        hou_li_alpha_m = alpha;
+        hou_li_exponent_m = exponent;
+    }
 
     bool useRK4() const { return time_integrator_m == "rk4"; }
 

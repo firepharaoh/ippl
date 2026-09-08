@@ -26,6 +26,7 @@ int main(int argc, char* argv[]) {
         if (argc < 8) {
             msg << "Usage: VortexInFourier3D nx ny nz np nt solver dump_freq [remesh_freq] "
                    "[--dt dt] [--method label] [--filter 0|1|2|3] "
+                   "[--hou-li-alpha value] [--hou-li-exponent value] "
                    "[--test-case taylor_green_3d] [--viscosity 0.0] "
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
                    "[--lcfl value] [--adaptive-lcfl] "
@@ -63,6 +64,8 @@ int main(int argc, char* argv[]) {
         bool remesh_spectrum_dump = false;
         bool pipeline_trace = false;
         int pipeline_trace_freq = 1;
+        double hou_li_alpha = 36.0;
+        int hou_li_exponent = 36;
         if (arg < static_cast<unsigned>(argc) && std::string(argv[arg]).rfind("--", 0) != 0) {
             remesh_freq = std::atoi(argv[arg++]);
         }
@@ -77,6 +80,10 @@ int main(int argc, char* argv[]) {
                 test_case = alvine::normalizeTestCaseName(argv[arg++]);
             } else if (option == "--filter" && arg < static_cast<unsigned>(argc)) {
                 spectral_filter = std::atoi(argv[arg++]);
+            } else if (option == "--hou-li-alpha" && arg < static_cast<unsigned>(argc)) {
+                hou_li_alpha = std::atof(argv[arg++]);
+            } else if (option == "--hou-li-exponent" && arg < static_cast<unsigned>(argc)) {
+                hou_li_exponent = std::atoi(argv[arg++]);
             } else if (option == "--viscosity" && arg < static_cast<unsigned>(argc)) {
                 viscosity = std::atof(argv[arg++]);
                 if (viscosity < 0.0) {
@@ -117,6 +124,12 @@ int main(int argc, char* argv[]) {
                 ippl::Comm->abort();
             } else if (option == "--filter") {
                 msg << "Missing value after --filter" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--hou-li-alpha") {
+                msg << "Missing value after --hou-li-alpha" << endl;
+                ippl::Comm->abort();
+            } else if (option == "--hou-li-exponent") {
+                msg << "Missing value after --hou-li-exponent" << endl;
                 ippl::Comm->abort();
             } else if (option == "--viscosity") {
                 msg << "Missing value after --viscosity" << endl;
@@ -177,6 +190,16 @@ int main(int argc, char* argv[]) {
                 << ". Use leapfrog or rk4." << endl;
             ippl::Comm->abort();
         }
+        if (hou_li_alpha < 0.0) {
+            msg << "Invalid --hou-li-alpha value " << hou_li_alpha
+                << ". Use a non-negative value." << endl;
+            ippl::Comm->abort();
+        }
+        if (hou_li_exponent <= 0) {
+            msg << "Invalid --hou-li-exponent value " << hou_li_exponent
+                << ". Use a positive integer." << endl;
+            ippl::Comm->abort();
+        }
 
         if (remesh_freq < 0) {
             msg << "Invalid --remesh-freq value " << remesh_freq
@@ -219,6 +242,8 @@ int main(int argc, char* argv[]) {
             << " Method: " << method
             << " Test case: " << test_case
             << " Spectral filter: " << spectral_filter
+            << " Hou-Li alpha: " << hou_li_alpha
+            << " Hou-Li exponent: " << hou_li_exponent
             << " viscosity: " << viscosity
             << " Remesh frequency: " << remesh_freq
             << " Diagnostics frequency: " << diagnostics_freq
@@ -235,6 +260,7 @@ int main(int argc, char* argv[]) {
                                             spectral_filter, viscosity, time_integrator,
                                             rmin, rmax, origin, remesh_freq,
                                             diagnostics_freq);
+        manager.setHouLiFilterParameters(hou_li_alpha, hou_li_exponent);
         manager.setRHSConsistencyTime(rhs_consistency_time);
         manager.setSpectrumDump(remesh_spectrum_dump);
         manager.setPipelineTrace(pipeline_trace, pipeline_trace_freq);

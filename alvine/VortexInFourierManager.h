@@ -766,6 +766,7 @@ public:
         this->logCirculationDiagnostics(this->computeParticleCirculation());
         logVorticitySpectrum();
         logDivergenceDiagnostics();
+        logEnstrophyRepresentationCheck();
         IpplTimings::stopTimer(PTimer);
 
         // gather velocity field

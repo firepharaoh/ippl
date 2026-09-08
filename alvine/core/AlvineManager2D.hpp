@@ -75,6 +75,8 @@ protected:
     int spectral_filter_m;
     int shapedegree_m = 1; // degree of the shape function for VIF, default is 1 (linear, CIC like)
     double viscosity_m;    // Viscosity for the viscous filter, default is 0.0 (no viscosity)
+    double hou_li_alpha_m = 36.0;
+    int hou_li_exponent_m = 36;
 
 public:
     AlvineManager2D(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_, std::string& solver_,
@@ -126,6 +128,11 @@ public:
     bool useShapeFunctionFilter() const { return spectral_filter_m == 1; }
 
     bool useHouLiFilter() const { return spectral_filter_m == 2; }
+
+    void setHouLiFilterParameters(const double alpha, const int exponent) {
+        hou_li_alpha_m = alpha;
+        hou_li_exponent_m = exponent;
+    }
 
     bool useRK4() const { return time_integrator_m == "rk4"; }
 

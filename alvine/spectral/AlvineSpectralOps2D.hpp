@@ -220,7 +220,7 @@
       }
     }
 
-    void Hou_Li_filter(ComplexField_t& modes, double alpha = 36.0, int exponent = 36) {
+    void Hou_Li_filter(ComplexField_t& modes) {
       if constexpr (Dim == 2) {
         auto view = modes.getView();
 
@@ -234,6 +234,8 @@
         const T kxMax = T(Nx) / T(2.0);
         const T kyMax = T(Ny) / T(2.0);
         const T invSqrtDim = T(1.0) / Kokkos::sqrt(T(2.0));
+        const T alpha = T(hou_li_alpha_m);
+        const int exponent = hou_li_exponent_m;
 
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
         Kokkos::parallel_for(
