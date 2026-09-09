@@ -23,6 +23,7 @@ public:
 
     using ParticleContainer_t = ParticleContainer<T, Dim>;
     using FieldContainer_t    = FieldContainer<T, Dim>;
+    using ComplexField_t      = typename AlvineManager<T, Dim>::ComplexField_t;
 
 private:
     int diagnostics_freq_m = 1;
@@ -31,6 +32,7 @@ private:
     bool leapfrog_history_valid_m = false;
     bool rk4_stage_trace_m = false;
     bool rk4_stage_trace_initialized_m = false;
+    ComplexField_t euler_sx_m, euler_sy_m, euler_sz_m;
 
 public:
     SpectralFSL3DManager(unsigned nt_, Vector_t<int, Dim>& nr_, unsigned np_,
@@ -67,6 +69,17 @@ public:
     }
 
     void pre_run() override {
+        if (useSpectralEuler3D()) {
+            const auto n = particlesPerDirection3D();
+            if (static_cast<size_type>(n) * n * n != this->np_m
+                || n != static_cast<unsigned>(this->nr_m[0])
+                || n != static_cast<unsigned>(this->nr_m[1])
+                || n != static_cast<unsigned>(this->nr_m[2])) {
+                throw std::runtime_error(
+                    "SFSL3D spectral Euler requires one particle per grid cell on a cubic "
+                    "grid for direct IFFT sampling (np = nx * ny * nz).");
+            }
+        }
         for (unsigned d = 0; d < Dim; ++d) {
             this->domain_m[d] = ippl::Index(this->nr_m[d]);
         }
@@ -88,6 +101,13 @@ public:
 
         this->fcontainer_m->initializeFields();
         this->initNUFFT3D();
+        if (useSpectralEuler3D()) {
+            auto& mesh = this->fcontainer_m->getMesh();
+            auto& layout = this->fcontainer_m->getFL();
+            euler_sx_m.initialize(mesh, layout);
+            euler_sy_m.initialize(mesh, layout);
+            euler_sz_m.initialize(mesh, layout);
+        }
 
         resetVirtualParticlesToGridFromTGV3D();
         scatterAndSolveCurrentParticles3D();
@@ -114,6 +134,9 @@ public:
         Inform m("Step: ");
         this->time_m += this->dt_m;
         this->it_m++;
+        if (useSpectralEuler3D()) {
+            logDiagnostics3D();
+        }
 
         if (this->dump_freq_m > 0 && this->it_m % this->dump_freq_m == 0) {
             this->dump();
@@ -186,7 +209,9 @@ public:
         this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
         this->computeSpectralVelocityModes3D();
-        this->applySpectralVelocityViscosity3D();
+        if (!useSpectralEuler3D()) {
+            this->applySpectralVelocityViscosity3D();
+        }
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
@@ -241,7 +266,13 @@ public:
 
     void resetVirtualParticlesToGridFromSpectralModes3D() {
         createGridLatticeParticles3D();
-        sampleGridParticlesFromSpectralModes3D(particleVolume3D());
+        if (useSpectralEuler3D()) {
+            this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+            this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
+            sampleEulerLatticeFromGrid3D();
+        } else {
+            sampleGridParticlesFromSpectralModes3D(particleVolume3D());
+        }
         leapfrog_history_valid_m = false;
     }
 
@@ -424,7 +455,13 @@ public:
         Kokkos::fence();
     }
 
+#include "spectral/SFSLEuler3D.hpp"
+
     void advectForward() {
+        if (useSpectralEuler3D()) {
+            advectSpectralEuler3D();
+            return;
+        }
         static IpplTimings::TimerRef solveTimer = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef gatherTimer = IpplTimings::getTimer("spectralGather");
         static IpplTimings::TimerRef pushTimer = IpplTimings::getTimer("sfsl3dPushParticles");

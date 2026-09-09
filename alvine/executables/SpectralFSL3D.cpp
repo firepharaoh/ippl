@@ -6,6 +6,9 @@
 //        [--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value]
 //        [--integrator euler|leapfrog|rk4] [--rk4-stage-trace]
 //        [--no-stretching] [--overallocate value] [--info level]
+// Euler uses the SFSL grid-stretching/implicit-diffusion split and direct IFFT
+// lattice sampling; it requires nx = ny = nz and np = nx * ny * nz.
+// Leapfrog and RK4 retain their existing particle-source implementations.
 
 constexpr unsigned Dim = 3;
 using T = double;
@@ -161,6 +164,11 @@ int main(int argc, char* argv[]) {
             << " Stretching: " << (useStretching ? "true" : "false")
             << " Time integrator: " << timeIntegrator
             << " RK4 stage trace: " << (rk4StageTrace ? "true" : "false") << endl;
+        if (timeIntegrator == "euler") {
+            msg << " Euler pipeline: grid stretching -> spectral Euler source -> "
+                   "implicit vorticity diffusion -> IFFT lattice sampling -> "
+                   "particle transport -> type-1 NUFFT scatter." << endl;
+        }
 
         SpectralFSL3DManager<T> manager(nt, nr, np, solver, dumpFreq, dt, method,
                                         spectralFilter, viscosity, timeIntegrator,
