@@ -21,8 +21,12 @@ int main(int argc, char** argv) {
         const double dt = 0.03;
         for (const double nu : {0.0, 0.2}) {
             SFSLProbe manager(3, nr, 512, solver, 0, dt, "sfsl_strang_test",
-                               0, nu, "rk4", lower, upper, lower, 0);
+                               0, nu, "strang", lower, upper, lower, 0);
             manager.pre_run();
+            check("coupled particle RHS and noncumulative synchronized stages",
+                  manager.coupledStageError());
+            check("shape filter is bypassed inside coupled stages",
+                  manager.coupledStageError(true));
             check("no diffusion during initialization", manager.gridError(false, 1));
             manager.applyStrangSpectralDiffusion3D(dt/2);
             check("first exact half-step on physical vorticity",
@@ -43,7 +47,7 @@ int main(int argc, char** argv) {
         }
 
         SFSLProbe adaptive(1, nr, 512, solver, 0, 0.1, "sfsl_strang_lcfl_test",
-                            0, 0.2, "rk4", lower, upper, lower, 0);
+                            0, 0.2, "strang", lower, upper, lower, 0);
         adaptive.pre_run();
         adaptive.setShear();
         adaptive.setAdaptiveLCFL(true);
@@ -54,7 +58,7 @@ int main(int argc, char** argv) {
               adaptive.gridError(true, std::exp(-0.2*selectedDt)));
 
         SFSLProbe clipped(1, nr, 512, solver, 0, 0.1, "sfsl_strang_clipped_test",
-                           0, 0.2, "rk4", lower, upper, lower, 0);
+                           0, 0.2, "strang", lower, upper, lower, 0);
         clipped.pre_run();
         clipped.setShear();
         clipped.setFinalTime(0.005);
@@ -85,7 +89,7 @@ int main(int argc, char** argv) {
         // order. Use a finer grid to keep remapping/aliasing below time errors.
         Vector_t<int,3> fineNr(16);
         SFSLProbe fine(32, fineNr, 4096, solver, 0, 0.00625, "sfsl_strang_reference",
-                        0, 0.02, "rk4", lower, upper, lower, 0);
+                        0, 0.02, "strang", lower, upper, lower, 0);
         fine.pre_run();
         fine.run(32);
         auto fullReference = fine.snapshot();
@@ -93,7 +97,7 @@ int main(int argc, char** argv) {
         for (int level=0; level<3; ++level) {
             const int steps = 2 << level;
             SFSLProbe run(steps, fineNr, 4096, solver, 0, 0.2/steps, "sfsl_strang_convergence",
-                           0, 0.02, "rk4", lower, upper, lower, 0);
+                           0, 0.02, "strang", lower, upper, lower, 0);
             run.pre_run();
             run.run(steps);
             errors[level] = run.modeError(fullReference);

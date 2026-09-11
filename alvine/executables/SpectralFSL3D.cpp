@@ -4,13 +4,14 @@
 //        [--dt value] [--final-time value] [--method label] [--filter 0|1|2|3]
 //        [--test-case taylor_green_3d] [--viscosity value]
 //        [--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value]
-//        [--integrator euler|leapfrog|rk4] [--rk4-stage-trace]
+//        [--integrator euler|leapfrog|rk4|strang] [--rk4-stage-trace]
 //        [--no-stretching] [--overallocate value] [--info level]
 // Euler uses the SFSL grid-stretching/implicit-diffusion split and direct IFFT
 // lattice sampling; it requires nx = ny = nz and np = nx * ny * nz.
 // RK4 uses D(dt/2) S(dt/2) A(dt) S(dt/2) D(dt/2), with spectral stretching
 // and particle advection integrated by RK4. This Strang composition is order 2.
 // RK4 has the same cell-center lattice requirement as Euler. Leapfrog is unchanged.
+// strang uses D(dt/2) -> coupled RK4(advection+stretching) -> D(dt/2).
 
 constexpr unsigned Dim = 3;
 using T = double;
@@ -42,7 +43,7 @@ int main(int argc, char* argv[]) {
                    "[--dt dt] [--final-time time] [--method label] [--filter 0|1|2|3] "
                    "[--test-case taylor_green_3d] [--viscosity value] "
                    "[--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value] "
-                   "[--integrator euler|leapfrog|rk4] [--rk4-stage-trace] "
+                   "[--integrator euler|leapfrog|rk4|strang] [--rk4-stage-trace] "
                    "[--no-stretching] "
                    "[--overallocate value] [--info level]"
                 << endl;
@@ -141,9 +142,9 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
         if (timeIntegrator != "euler" && timeIntegrator != "leapfrog"
-            && timeIntegrator != "rk4") {
+            && timeIntegrator != "rk4" && timeIntegrator != "strang") {
             msg << "Invalid --integrator value " << timeIntegrator
-                << ". Use euler, leapfrog, or rk4." << endl;
+                << ". Use euler, leapfrog, rk4, or strang." << endl;
             ippl::Comm->abort();
         }
 
@@ -170,6 +171,10 @@ int main(int argc, char* argv[]) {
             msg << " Euler pipeline: grid stretching -> spectral Euler source -> "
                    "implicit vorticity diffusion -> IFFT lattice sampling -> "
                    "particle transport -> type-1 NUFFT scatter." << endl;
+        } else if (timeIntegrator == "strang") {
+            msg << " Strang pipeline: spectral diffusion half -> coupled particle RK4 "
+                   "(advection + stretching) full -> spectral diffusion half -> "
+                   "IFFT lattice reset. Overall order: 2." << endl;
         } else if (timeIntegrator == "rk4") {
             msg << " RK4 pipeline: spectral diffusion half -> grid stretching RK4 half -> "
                    "particle advection RK4 full -> grid stretching RK4 half -> "

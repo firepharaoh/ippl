@@ -60,6 +60,59 @@ public:
     double energy() { return this->computeSpectralEnergy3D(); }
     double enstrophy() { return this->computeSpectralEnstrophy3D(); }
 
+    double coupledStageError(const bool enableShapeFilter = false) {
+        const int savedFilter = this->spectral_filter_m;
+        if (enableShapeFilter) {
+            this->spectral_filter_m = 1;
+            this->initializeShapeFunctionVIF3D();
+        }
+        auto pc = this->pcontainer_m;
+        pc->rk4_R0 = pc->R;
+        pc->rk4_omega0 = pc->omega;
+        evaluateCoupledStrangRHS3D(pc->rk4_k1, pc->rk4_omega_k1, "test_rhs");
+        // Repeating the same temporary stage must not accumulate either R or
+        // Gamma. Registered bases/slopes must survive pc->update migration.
+        setCoupledStrangStage3D(pc->rk4_k1, pc->rk4_omega_k1, T(0.5));
+        setCoupledStrangStage3D(pc->rk4_k1, pc->rk4_omega_k1, T(0.5));
+        auto R = pc->R.getView(); auto R0 = pc->rk4_R0.getView();
+        auto w = pc->omega.getView(); auto w0 = pc->rk4_omega0.getView();
+        auto kr = pc->rk4_k1.getView(); auto kw = pc->rk4_omega_k1.getView();
+        auto wx = pc->omega_x.getView(); auto wy = pc->omega_y.getView();
+        auto wz = pc->omega_z.getView();
+        const T volume = particleVolume3D();
+        const T h = T(this->dt_m)/2;
+        const auto lower = this->rmin_m;
+        const Vector_t<T,3> lengths = this->rmax_m-this->rmin_m;
+        T error = 0;
+        Kokkos::parallel_reduce("test_coupled_stage", pc->getLocalNum(),
+            KOKKOS_LAMBDA(const size_t p, T& e) {
+                const T x=R0(p)[0], y=R0(p)[1], z=R0(p)[2];
+                Vector_t<T,3> velocity(0), source(0);
+                velocity[0] = Kokkos::sin(x)*Kokkos::cos(y)*Kokkos::cos(z);
+                velocity[1] = -Kokkos::cos(x)*Kokkos::sin(y)*Kokkos::cos(z);
+                source[0] = -Kokkos::sin(2*y)*Kokkos::sin(2*z)/4;
+                source[1] = Kokkos::sin(2*x)*Kokkos::sin(2*z)/4;
+                for (unsigned d=0; d<3; ++d) {
+                    e = Kokkos::max(e, Kokkos::abs(kr(p)[d]-velocity[d]));
+                    e = Kokkos::max(e, Kokkos::abs(kw(p)[d]/volume-source[d]));
+                    T expected = R0(p)[d]+h*kr(p)[d];
+                    expected -= lengths[d]*Kokkos::floor((expected-lower[d])/lengths[d]);
+                    e = Kokkos::max(e, Kokkos::abs(R(p)[d]-expected));
+                    e = Kokkos::max(e, Kokkos::abs(w(p)[d]-w0(p)[d]-h*kw(p)[d])/volume);
+                }
+                e = Kokkos::max(e, Kokkos::abs(wx(p)-w(p)[0]));
+                e = Kokkos::max(e, Kokkos::abs(wy(p)-w(p)[1]));
+                e = Kokkos::max(e, Kokkos::abs(wz(p)-w(p)[2]));
+            }, Kokkos::Max<T>(error));
+        T global = 0;
+        MPI_Allreduce(&error, &global, 1, MPI_DOUBLE, MPI_MAX, ippl::Comm->getCommunicator());
+        setCoupledStrangStage3D(pc->rk4_k1, pc->rk4_omega_k1, T(0));
+        this->spectralScatter3D(false);
+        this->computeSpectralVelocityModes3D();
+        this->spectral_filter_m = savedFilter;
+        return global;
+    }
+
     using Modes = std::array<ComplexField_t, 3>;
 
     Modes snapshot() {

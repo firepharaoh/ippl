@@ -70,15 +70,17 @@ public:
         rk4_stage_trace_m = enabled;
     }
 
+    bool useStrang3D() const { return this->time_integrator_m == "strang"; }
+
     void pre_run() override {
-        if (useSpectralEuler3D() || this->useRK4()) {
+        if (useSpectralEuler3D() || this->useRK4() || useStrang3D()) {
             const auto n = particlesPerDirection3D();
             if (static_cast<size_type>(n) * n * n != this->np_m
                 || n != static_cast<unsigned>(this->nr_m[0])
                 || n != static_cast<unsigned>(this->nr_m[1])
                 || n != static_cast<unsigned>(this->nr_m[2])) {
                 throw std::runtime_error(
-                    "SFSL3D spectral Euler/RK4 requires one particle per grid cell on a cubic "
+                    "SFSL3D spectral Euler/RK4/Strang requires one particle per grid cell on a cubic "
                     "grid for direct IFFT sampling (np = nx * ny * nz).");
             }
         }
@@ -103,7 +105,7 @@ public:
 
         this->fcontainer_m->initializeFields();
         this->initNUFFT3D();
-        if (useSpectralEuler3D() || this->useRK4()) {
+        if (useSpectralEuler3D() || this->useRK4() || useStrang3D()) {
             auto& mesh = this->fcontainer_m->getMesh();
             auto& layout = this->fcontainer_m->getFL();
             euler_sx_m.initialize(mesh, layout);
@@ -140,7 +142,7 @@ public:
         Inform m("Step: ");
         this->time_m += this->dt_m;
         this->it_m++;
-        if (useSpectralEuler3D() || this->useRK4()) {
+        if (useSpectralEuler3D() || this->useRK4() || useStrang3D()) {
             logDiagnostics3D();
         }
 
@@ -215,10 +217,10 @@ public:
         this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
         this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
         this->computeSpectralVelocityModes3D();
-        if (!useSpectralEuler3D() && !this->useRK4()) {
+        if (!useSpectralEuler3D() && !this->useRK4() && !useStrang3D()) {
             this->applySpectralVelocityViscosity3D();
         }
-        if (!this->useRK4()) {
+        if (!this->useRK4() && !useStrang3D()) {
             this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
             this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
             this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
@@ -274,7 +276,7 @@ public:
 
     void resetVirtualParticlesToGridFromSpectralModes3D() {
         createGridLatticeParticles3D();
-        if (useSpectralEuler3D() || this->useRK4()) {
+        if (useSpectralEuler3D() || this->useRK4() || useStrang3D()) {
             this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
             this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
             sampleEulerLatticeFromGrid3D();
@@ -465,8 +467,13 @@ public:
 
 #include "spectral/SFSLEuler3D.hpp"
 #include "spectral/SFSLStrang3D.hpp"
+#include "spectral/SFSLCoupledStrang3D.hpp"
 
     void advectForward() {
+        if (useStrang3D()) {
+            advanceCoupledStrang3D();
+            return;
+        }
         if (useSpectralEuler3D()) {
             advectSpectralEuler3D();
             return;

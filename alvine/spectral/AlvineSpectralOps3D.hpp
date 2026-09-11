@@ -471,7 +471,7 @@
         Kokkos::fence();
     }
 
-    void spectralGather3D() {
+    void spectralGather3D(const bool applyShapeFilter = true) {
         if (!nufftType2_mp) {
             throw std::runtime_error("AlvineManager3D::spectralGather3D called before initNUFFT3D");
         }
@@ -485,7 +485,7 @@
         auto uyModes = uy_hat_m.deepCopy();
         auto uzModes = uz_hat_m.deepCopy();
 
-        if (useShapeFunctionFilter()) {
+        if (applyShapeFilter && useShapeFunctionFilter()) {
             auto uxModeView = uxModes.getView();
             auto uyModeView = uyModes.getView();
             auto uzModeView = uzModes.getView();
@@ -934,7 +934,7 @@
     }
 
 
-    void spectralGatherGradientModes3D() {
+    void spectralGatherGradientModes3D(const bool applyShapeFilter = true) {
         if (!nufftType2_mp) {
             throw std::runtime_error("AlvineManager3D::spectralGatherGradientModes3D called before initNUFFT3D");
         }
@@ -961,7 +961,7 @@
         auto duzdyModes = duzdy_hat_m.deepCopy();
         auto duzdzModes = duzdz_hat_m.deepCopy();
 
-        if (useShapeFunctionFilter()) {
+        if (applyShapeFilter && useShapeFunctionFilter()) {
             auto shapeView = Sk_m.getView();
             const int nghost = duxdxModes.getNghost();
             auto duxdxView = duxdxModes.getView();

@@ -59,7 +59,51 @@ The tolerance is 2e-7, allowing the existing type-1 NUFFT tolerance while
 detecting missing diffusion, extra diffusion, wrong k^2 recovery, FFT
 normalization/phase errors, or discarded source updates.
 
-## Strang Splitting with RK4 Substeps
+## PDF Coupled RK4 with Strang Diffusion
+
+Select `--integrator strang` for the nonlinear treatment in
+`SFSL_RK4_full_pipeline_A4.pdf`:
+
+```
+D(dt/2) -> RK4(advection + stretching, dt) -> D(dt/2)
+```
+
+The first exact diffusion half-step multiplies stored `q=omega_hat/k^2`
+by `exp(-nu*k^2*dt/2)`. IFFT samples refresh lattice particle strengths.
+Each classical RK4 stage then evolves BOTH `R` and `Gamma=omega*particleVolume`
+from their saved post-diffusion base states. Each RHS scatters that stage's
+particles with Type-1 NUFFT, constructs velocity and nine spectral gradients,
+and gathers them at the stage positions using Type-2 NUFFT. The slopes are
+`k_R=u` and `k_Gamma=grad(u)*Gamma`; no additional volume factor or dt belongs
+in the RHS. The final combination uses weights `(1,2,2,1)/6` for both states.
+Only after scattering this combination is the second diffusion half applied.
+There are no separate stretching half-steps in this path.
+
+SFSL transfer conventions replace the diagram's generic grid interpolation:
+no CIC, direct IFFT sampling only on cell centers, NUFFT at off-grid stages.
+The completed spectral state remains authoritative and supplies a new lattice,
+rather than retaining the diagram's off-grid particles for the next timestep.
+As for Euler, a cubic grid and one particle per grid cell are required.
+
+LCFL/final-time clipping selects one dt before either diffusion half. Stage
+RHS calls do not adapt dt, filter, project the stored vorticity, or apply
+viscosity. The normal solenoidal projection and configured filter act on the
+completed step. Existing zero/Nyquist conventions are unchanged.
+
+Overall formal temporal order is two with diffusion and four for the isolated
+coupled nonlinear ODE; transfer, projection, and filtering errors can limit
+observed convergence. Exact diffusion is contractive but does not guarantee
+nonlinear stability or inviscid energy/enstrophy conservation. The nonlinear
+RK evaluations and MPI/NUFFT operation order differ from the `rk4` path;
+bitwise agreement between those paths or different rank layouts is not expected.
+
+Kernels use the configured Kokkos execution and memory space. Existing
+registered particle bases/slopes are reused and migrate together; there are
+no full-state host copies. Three spectral source buffers support LCFL, but
+the six grid-stretching RK scratch fields are not allocated for `strang`.
+Gathering nine gradients at four stages adds distributed NUFFT work.
+
+## Legacy Grid-Split RK4 Option
 
 Select this path with `--integrator rk4`. It adapts the three blocks in
 `SFSL_RK4_full_pipeline_A4.pdf` to preserve SFSL grid-based stretching:
@@ -120,9 +164,11 @@ cmake --build build_openmp --target SpectralFSL3D SFSLEuler3DTest SFSLStrang3DTe
 ctest --test-dir build_openmp -R '^sfsl_(euler|strang)_3d_' --output-on-failure
 ```
 
-`SFSLStrang3DTest` checks exact half-step diffusion, full shear decay and
+`SFSLStrang3DTest` exercises `--integrator strang`: analytic TGV particle RHS,
+strength-volume scaling, repeated noncumulative and synchronized temporary
+stages across migration, exact half-step diffusion, full shear decay and
 particle reset, inviscid/disabled-source cases, LCFL and final-time consistency,
-fourth-order refinement of isolated stretching, and second-order refinement
+fourth-order refinement of legacy `rk4` isolated stretching, and second-order refinement
 of the complete noncommuting TGV composition on a 16^3 grid. The MPI tests run
 on one and two ranks. The full-composition refinement test deliberately uses
 a finer grid than the individual operator tests to reduce the transfer-error
