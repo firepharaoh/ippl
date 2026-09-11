@@ -8,7 +8,9 @@
 //        [--no-stretching] [--overallocate value] [--info level]
 // Euler uses the SFSL grid-stretching/implicit-diffusion split and direct IFFT
 // lattice sampling; it requires nx = ny = nz and np = nx * ny * nz.
-// Leapfrog and RK4 retain their existing particle-source implementations.
+// RK4 uses D(dt/2) S(dt/2) A(dt) S(dt/2) D(dt/2), with spectral stretching
+// and particle advection integrated by RK4. This Strang composition is order 2.
+// RK4 has the same cell-center lattice requirement as Euler. Leapfrog is unchanged.
 
 constexpr unsigned Dim = 3;
 using T = double;
@@ -168,6 +170,10 @@ int main(int argc, char* argv[]) {
             msg << " Euler pipeline: grid stretching -> spectral Euler source -> "
                    "implicit vorticity diffusion -> IFFT lattice sampling -> "
                    "particle transport -> type-1 NUFFT scatter." << endl;
+        } else if (timeIntegrator == "rk4") {
+            msg << " RK4 pipeline: spectral diffusion half -> grid stretching RK4 half -> "
+                   "particle advection RK4 full -> grid stretching RK4 half -> "
+                   "spectral diffusion half. Overall Strang order: 2." << endl;
         }
 
         SpectralFSL3DManager<T> manager(nt, nr, np, solver, dumpFreq, dt, method,

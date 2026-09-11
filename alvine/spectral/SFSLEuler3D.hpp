@@ -35,11 +35,11 @@
         Kokkos::fence();
     }
 
-    void computeEulerGridSource3D() {
+    void computeEulerGridSource3D(const bool adaptTimestep = true) {
         euler_sx_m = Kokkos::complex<T>(0, 0);
         euler_sy_m = Kokkos::complex<T>(0, 0);
         euler_sz_m = Kokkos::complex<T>(0, 0);
-        if (!use_stretching_m && !this->adaptive_lcfl_m) {
+        if (!use_stretching_m && !(this->adaptive_lcfl_m && adaptTimestep)) {
             return;
         }
 
@@ -93,7 +93,7 @@
 
         // Select dt before either source operator. The global grid maximum
         // supplies the deformation constraint without a particle gather.
-        if (this->adaptive_lcfl_m) {
+        if (this->adaptive_lcfl_m && adaptTimestep) {
             T localMax = 0;
             Kokkos::parallel_reduce(
                 "sfsl_euler_grid_deformation", ippl::getRangePolicy(sx, ng),

@@ -10,74 +10,7 @@ const char* TestName = "SFSLEuler3DTest";
 #include <iostream>
 #include <stdexcept>
 
-class EulerProbe : public SpectralFSL3DManager<T> {
-public:
-    using SpectralFSL3DManager<T>::SpectralFSL3DManager;
-
-    void setShear() {
-        // u=(sin(y),0,0), omega=(0,0,-cos(y)): stretching and advection
-        // of omega vanish exactly, even though particles move in x.
-        auto pc = this->pcontainer_m;
-        auto R = pc->R.getView();
-        auto w = pc->omega.getView();
-        auto wx = pc->omega_x.getView();
-        auto wy = pc->omega_y.getView();
-        auto wz = pc->omega_z.getView();
-        const T volume = particleVolume3D();
-        Kokkos::parallel_for("test_initialize_shear", pc->getLocalNum(),
-            KOKKOS_LAMBDA(const size_t p) {
-                w(p)[0] = wx(p) = 0;
-                w(p)[1] = wy(p) = 0;
-                w(p)[2] = wz(p) = -Kokkos::cos(R(p)[1]) * volume;
-            });
-        Kokkos::fence();
-        scatterAndSolveCurrentParticles3D();
-    }
-
-    double gridError(const bool shear, const T amplitude, const T sourceAmplitude = 0) {
-        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
-        auto w = this->fcontainer_m->getOmegaField().getView();
-        const int ng = this->fcontainer_m->getOmegaField().getNghost();
-        const auto local = this->fcontainer_m->getFL().getLocalNDIndex();
-        const auto dx = this->hr_m;
-        T localError = 0;
-        Kokkos::parallel_reduce("test_euler_grid_error", ippl::getRangePolicy(w, ng),
-            KOKKOS_LAMBDA(const int i, const int j, const int k, T& error) {
-                const T x = (i - ng + local[0].first() + T(0.5)) * dx[0];
-                const T y = (j - ng + local[1].first() + T(0.5)) * dx[1];
-                const T z = (k - ng + local[2].first() + T(0.5)) * dx[2];
-                Vector_t<T,3> expected(0);
-                if (shear) {
-                    expected[2] = -amplitude * Kokkos::cos(y);
-                } else {
-                    expected = TaylorGreen3D<T>::vorticity(x,y,z) * amplitude;
-                    // Independently differentiated TGV: Sx=-sin(2y)sin(2z)/4,
-                    // Sy=sin(2x)sin(2z)/4, Sz=0. These modes have k^2=8.
-                    expected[0] -= sourceAmplitude * Kokkos::sin(2*y) * Kokkos::sin(2*z) / 4;
-                    expected[1] += sourceAmplitude * Kokkos::sin(2*x) * Kokkos::sin(2*z) / 4;
-                }
-                for (unsigned d=0; d<3; ++d) {
-                    error = Kokkos::max(error, Kokkos::abs(w(i,j,k)[d] - expected[d]));
-                }
-            }, Kokkos::Max<T>(localError));
-        double globalError = 0;
-        MPI_Allreduce(&localError, &globalError, 1, MPI_DOUBLE, MPI_MAX,
-                      ippl::Comm->getCommunicator());
-        return globalError;
-    }
-
-    double energy() { return this->computeSpectralEnergy3D(); }
-    double enstrophy() { return this->computeSpectralEnstrophy3D(); }
-};
-
-void check(const char* label, double error, double tolerance = 2e-7) {
-    if (ippl::Comm->rank() == 0) {
-        std::cout << label << ": error=" << error << std::endl;
-    }
-    if (!std::isfinite(error) || error > tolerance) {
-        throw std::runtime_error(label);
-    }
-}
+#include "SFSL3DTestSupport.hpp"
 
 int main(int argc, char** argv) {
     ippl::initialize(argc, argv);
@@ -89,7 +22,7 @@ int main(int argc, char** argv) {
         std::string solver = "FFT";
         const double dt = 0.03;
         for (const double nu : {0.0, 0.2}) {
-            EulerProbe manager(3, nr, 512, solver, 0, dt, "sfsl_euler_test",
+            SFSLProbe manager(3, nr, 512, solver, 0, dt, "sfsl_euler_test",
                                0, nu, "euler", lower, upper, lower, 0);
             manager.pre_run();
             check("initial TGV FFT/IFFT normalization (no initial viscous step)",
@@ -113,7 +46,7 @@ int main(int argc, char** argv) {
                   std::abs(manager.enstrophy()/initialEnstrophy - amplitude*amplitude));
         }
 
-        EulerProbe adaptive(1, nr, 512, solver, 0, 0.1, "sfsl_euler_lcfl_test",
+        SFSLProbe adaptive(1, nr, 512, solver, 0, 0.1, "sfsl_euler_lcfl_test",
                             0, 0.2, "euler", lower, upper, lower, 0);
         adaptive.pre_run();
         adaptive.setShear();
@@ -124,7 +57,7 @@ int main(int argc, char** argv) {
         check("final-time clipped dt also used by diffusion",
               adaptive.gridError(true, 1/(1+0.2*0.005)));
 
-        EulerProbe lcfl(1, nr, 512, solver, 0, 0.1, "sfsl_euler_lcfl_active_test",
+        SFSLProbe lcfl(1, nr, 512, solver, 0, 0.1, "sfsl_euler_lcfl_active_test",
                         0, 0.2, "euler", lower, upper, lower, 0);
         lcfl.pre_run();
         lcfl.setShear();

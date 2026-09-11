@@ -35,6 +35,9 @@ target_link_libraries(SpectralFSL3D ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Hefft
 
 if(IPPL_ENABLE_TESTS)
     add_executable(SFSLEuler3DTest tests/SFSLEuler3DTest.cpp)
+    add_executable(SFSLStrang3DTest tests/SFSLStrang3DTest.cpp)
+    target_include_directories(SFSLStrang3DTest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine)
+    target_link_libraries(SFSLStrang3DTest ${IPPL_LIBS} MPI::MPI_CXX Heffte::Heffte)
     target_include_directories(SFSLEuler3DTest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine)
     target_link_libraries(SFSLEuler3DTest ${IPPL_LIBS} MPI::MPI_CXX Heffte::Heffte)
     foreach(ranks IN ITEMS 1 2)
@@ -43,6 +46,11 @@ if(IPPL_ENABLE_TESTS)
                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:SFSLEuler3DTest> ${MPIEXEC_POSTFLAGS})
         set_tests_properties(sfsl_euler_3d_${ranks}_ranks PROPERTIES
             PROCESSORS ${ranks} TIMEOUT 180 LABELS "alvine;sfsl;euler")
+        add_test(NAME sfsl_strang_3d_${ranks}_ranks
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks}
+                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:SFSLStrang3DTest> ${MPIEXEC_POSTFLAGS})
+        set_tests_properties(sfsl_strang_3d_${ranks}_ranks PROPERTIES
+            PROCESSORS ${ranks} TIMEOUT 600 LABELS "alvine;sfsl;strang")
     endforeach()
 endif()
 

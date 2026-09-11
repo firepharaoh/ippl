@@ -288,12 +288,17 @@
         Kokkos::fence();
     }
 
-    void computeSpectralVelocityModes3D() {
+    void computeSpectralVelocityModes3D(const bool projectVorticity = true) {
         // Ensure the vorticity modes are solenoidal before using the
         // Biot-Savart relation. Filtering, remeshing, and particle scatter can
         // introduce a small k-parallel component that would otherwise appear as
         // nonzero div(omega) in diagnostics and downstream reconstructions.
-        projectSpectralVorticityModes3D();
+        // SFSL's split source/transport subflows need not each be solenoidal.
+        // They use the same Biot-Savart operator without changing their stage
+        // state, then project once after the complete symmetric composition.
+        if (projectVorticity) {
+            projectSpectralVorticityModes3D();
+        }
 
         auto ox = omega_x_hat_m.getView();
         auto oy = omega_y_hat_m.getView();
