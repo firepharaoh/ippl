@@ -187,7 +187,9 @@ public:
     }
 
     void advance() override {
-        if (this->useRK4()) {
+        if (this->time_integrator_m == "euler") {
+            EulerStep();
+        } else if (this->useRK4()) {
             RK4Step();
         } else {
             LeapFrogStep();
@@ -1611,6 +1613,8 @@ public:
     }
 
     void computeRK4ParticleRHS(bool diagnostics, bool adaptTimestep = false) {
+        // Shared by RK4 stages and forward Euler. Euler image steps 2-5
+        // evaluate operators only; this function does not advance R or Gamma.
         static IpplTimings::TimerRef PTimer = IpplTimings::getTimer("pushVelocity");
         static IpplTimings::TimerRef SolveTimer = IpplTimings::getTimer("solve");
         static IpplTimings::TimerRef par2gridTimer = IpplTimings::getTimer("spectralScatter");
@@ -1619,18 +1623,22 @@ public:
             IpplTimings::getTimer("spectralGradientGather");
 
         IpplTimings::startTimer(par2gridTimer);
+        // Euler step 2: Type-1 NUFFT of current particle strengths; stored
+        // q=omega_hat/k^2 includes the scatter's volume normalization.
         traceCudaCheckpoint3D("RK4 RHS BEFORE SCATTER");
         refreshSpectralVorticityModes3D(true);
         IpplTimings::stopTimer(par2gridTimer);
         traceCudaCheckpoint3D("RK4 RHS AFTER SCATTER");
 
         IpplTimings::startTimer(SolveTimer);
+        // Euler step 3: u_hat=i*k cross q, with the configured projection.
         this->computeSpectralVelocityModes3D();
         traceCudaCheckpoint3D("RK4 RHS AFTER BIOT SAVART");
         this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         traceCudaCheckpoint3D("RK4 RHS AFTER VELOCITY FILTER");
+        // Euler step 4: grad(u)_hat=i*k_j*u_i_hat and D_hat=-nu*k^4*q.
         this->computeSpectralVelocityGradientModes3D();
         traceCudaCheckpoint3D("RK4 RHS AFTER GRADIENT MODES");
 
@@ -1653,6 +1661,8 @@ public:
         IpplTimings::stopTimer(PTimer);
 
         IpplTimings::startTimer(gradientGatherTimer);
+        // Euler step 5: Type-2 evaluation at unchanged R^n. Gradient and
+        // diffusion samples are physical values, not particle strengths.
         this->spectralGatherGradientModes3D();
         traceCudaCheckpoint3D("RK4 RHS AFTER GRADIENT GATHER");
         if (this->viscosity_m > 0.0) {
@@ -1670,6 +1680,7 @@ public:
         }
 
         IpplTimings::startTimer(grid2parTimer);
+        // Euler step 5 (velocity): gather u^n at the same unchanged positions.
         this->spectralGather3D();
         IpplTimings::stopTimer(grid2parTimer);
         traceCudaCheckpoint3D("RK4 RHS AFTER VELOCITY GATHER");
@@ -1808,6 +1819,41 @@ public:
         Kokkos::fence();
         IpplTimings::stopTimer(RTimer);
         traceCudaCheckpoint3D("RK4 AFTER FINALIZE STATE");
+    }
+
+    void EulerStep() {
+        auto pc = this->pcontainer_m;
+        static IpplTimings::TimerRef timer = IpplTimings::getTimer("vif3dEuler");
+        IpplTimings::startTimer(timer);
+        // Step 1: preserve Y^n=(R^n,Gamma^n), where Gamma=omega*dVp.
+        // Reuse registered RK storage so no new particle buffers are needed.
+        pc->rk4_R0 = pc->R;
+        pc->rk4_omega0 = pc->omega;
+        // Steps 2-5 are numbered inside this shared operator-evaluation helper.
+        // Its historical RK4 name does not imply multiple Euler evaluations.
+        computeRK4ParticleRHS(shouldLogDiagnostics3D(), true);
+
+        // Step 6: k_Gamma = grad(u^n)*Gamma^n + dVp*D^n.
+        // All RHS terms are evaluated BEFORE changing positions or strengths.
+        pc->rk4_k1 = pc->P;
+        storeRK4OmegaRHS(pc->rk4_omega_k1);
+
+        // Step 7: Gamma^(n+1)=Gamma^n+dt*k_Gamma (explicit viscosity).
+        // Step 8: R^(n+1)=R^n+dt*u^n, NOT velocity from the updated vorticity.
+        // The shared kernel performs both updates; scale=1 gives exactly dt.
+        pc->R_old = pc->rk4_R0;
+        setRK4StageState(pc->rk4_R0, pc->rk4_omega0,
+                        pc->rk4_k1, pc->rk4_omega_k1, T(1));
+        wrapParticlePositions3D(pc->R);
+        pc->update();
+        traceCudaCheckpoint3D("EULER AFTER FINAL UPDATE");
+
+        // VIF retains particles between steps; only the configured remesh
+        // schedule replaces them. Remeshing never adds another advection.
+        if (remesh_freq_m > 0 && (this->it_m + 1) % remesh_freq_m == 0) {
+            remeshParticles3D();
+        }
+        IpplTimings::stopTimer(timer);
     }
 
     void RK4Step() {

@@ -31,6 +31,7 @@ int main(int argc, char* argv[]) {
                    "[--remesh-freq frequency] [--diagnostics-freq frequency] "
                    "[--lcfl value] [--adaptive-lcfl] "
                    "[--final-time time] "
+                   "[--integrator euler|leapfrog|rk4] "
                    "[--rhs-consistency-time time] [--remesh-spectrum-dump] "
                    "[--pipeline-trace] [--pipeline-trace-freq frequency] "
                    "[--overallocate value] [--info level]"
@@ -185,9 +186,9 @@ int main(int argc, char* argv[]) {
             ippl::Comm->abort();
         }
 
-        if (time_integrator != "leapfrog" && time_integrator != "rk4") {
+        if (time_integrator != "euler" && time_integrator != "leapfrog" && time_integrator != "rk4") {
             msg << "Invalid --integrator value " << time_integrator
-                << ". Use leapfrog or rk4." << endl;
+                << ". Use euler, leapfrog, or rk4." << endl;
             ippl::Comm->abort();
         }
         if (hou_li_alpha < 0.0) {
@@ -255,6 +256,12 @@ int main(int argc, char* argv[]) {
             << " Pipeline trace: " << (pipeline_trace ? "true" : "false")
             << " Pipeline trace frequency: " << pipeline_trace_freq
             << " Time integrator: " << time_integrator << endl;
+        if (time_integrator == "euler") {
+            msg << " Euler pipeline: scatter -> spectral velocity/gradients/Laplacian -> "
+                   "gather at current positions -> simultaneous explicit particle update. "
+                   "Viscosity is explicit; LCFL alone does not enforce diffusion stability."
+                << endl;
+        }
 
         VortexInFourier3DManager<T> manager(nt, nr, np, solver, dump_freq, dt, method,
                                             spectral_filter, viscosity, time_integrator,
