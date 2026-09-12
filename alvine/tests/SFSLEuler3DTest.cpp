@@ -7,10 +7,70 @@ const char* TestName = "SFSLEuler3DTest";
 #include "datatypes.h"
 #include "SpectralFSL3DManager.h"
 #include <cmath>
+#include <complex>
 #include <iostream>
 #include <stdexcept>
 
 #include "SFSL3DTestSupport.hpp"
+
+class EulerProbe : public SFSLProbe {
+public:
+    using SFSLProbe::SFSLProbe;
+
+    Modes directTGVStep() {
+        // Independent DFT of analytically advected TGV strengths, plus the
+        // analytic stretching at ORIGINAL positions. No production source,
+        // transport, or IMEX kernel is used to construct this reference.
+        auto result = snapshot();
+        auto hx = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, result[0].getView());
+        auto hy = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, result[1].getView());
+        auto hz = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, result[2].getView());
+        const auto local = result[0].getLayout().getLocalNDIndex();
+        const int ng = result[0].getNghost(), n = this->nr_m[0];
+        const T pi = std::acos(-1.0), dt = this->dt_m;
+        for (int i=ng; i<int(hx.extent(0))-ng; ++i)
+        for (int j=ng; j<int(hx.extent(1))-ng; ++j)
+        for (int k=ng; k<int(hx.extent(2))-ng; ++k) {
+            const int g[3] = {i-ng+local[0].first(), j-ng+local[1].first(), k-ng+local[2].first()};
+            int m[3], wave[3];
+            T k2 = 0;
+            for (int d=0; d<3; ++d) {
+                m[d] = g[d] <= n/2 ? g[d] : g[d]-n;
+                wave[d] = g[d] == n/2 ? 0 : m[d];
+                k2 += wave[d]*wave[d];
+            }
+            std::complex<T> q[3] = {};
+            if (k2 != 0) {
+                for (int a=0; a<n; ++a)
+                for (int b=0; b<n; ++b)
+                for (int c=0; c<n; ++c) {
+                    const T x=(a+T(0.5))*2*pi/n, y=(b+T(0.5))*2*pi/n, z=(c+T(0.5))*2*pi/n;
+                    const T ux=std::sin(x)*std::cos(y)*std::cos(z);
+                    const T uy=-std::cos(x)*std::sin(y)*std::cos(z);
+                    const T omega[3] = {-std::cos(x)*std::sin(y)*std::sin(z),
+                        -std::sin(x)*std::cos(y)*std::sin(z), 2*std::sin(x)*std::sin(y)*std::cos(z)};
+                    const T source[3] = {-std::sin(2*y)*std::sin(2*z)/4,
+                        std::sin(2*x)*std::sin(2*z)/4, 0};
+                    const auto advected = std::polar(T(1), -(m[0]*(x+dt*ux)+m[1]*(y+dt*uy)+m[2]*z));
+                    const auto original = std::polar(T(1), -(m[0]*x+m[1]*y+m[2]*z));
+                    for (int d=0; d<3; ++d) q[d] += omega[d]*advected + dt*source[d]*original;
+                }
+                const T norm = T(n)*n*n*k2*(1+this->viscosity_m*dt*k2);
+                for (auto& value : q) value /= norm;
+                // The solver retains its end-step solenoidal projection.
+                std::complex<T> dot = T(wave[0])*q[0]+T(wave[1])*q[1]+T(wave[2])*q[2];
+                for (int d=0; d<3; ++d) q[d] -= T(wave[d])*dot/k2;
+            }
+            hx(i,j,k) = Kokkos::complex<T>(q[0].real(),q[0].imag());
+            hy(i,j,k) = Kokkos::complex<T>(q[1].real(),q[1].imag());
+            hz(i,j,k) = Kokkos::complex<T>(q[2].real(),q[2].imag());
+        }
+        Kokkos::deep_copy(result[0].getView(),hx);
+        Kokkos::deep_copy(result[1].getView(),hy);
+        Kokkos::deep_copy(result[2].getView(),hz);
+        return result;
+    }
+};
 
 int main(int argc, char** argv) {
     ippl::initialize(argc, argv);
@@ -22,6 +82,14 @@ int main(int argc, char** argv) {
         std::string solver = "FFT";
         const double dt = 0.03;
         for (const double nu : {0.0, 0.2}) {
+            EulerProbe pipeline(1, nr, 512, solver, 0, dt, "sfsl_euler_order_test",
+                                0, nu, "euler", lower, upper, lower, 0);
+            pipeline.pre_run();
+            auto expected = pipeline.directTGVStep();
+            pipeline.run(1);
+            check("advection first, original-grid stretching, then implicit diffusion",
+                  pipeline.modeError(expected));
+
             SFSLProbe manager(3, nr, 512, solver, 0, dt, "sfsl_euler_test",
                                0, nu, "euler", lower, upper, lower, 0);
             manager.pre_run();
@@ -38,7 +106,7 @@ int main(int argc, char** argv) {
             const double initialEnstrophy = manager.enstrophy();
             manager.run(3);
             const double amplitude = std::pow(1+nu*dt, -3);
-            check("three complete Euler steps preserve source-updated strengths",
+            check("three complete Euler steps preserve the post-advection IMEX state",
                   manager.gridError(true, amplitude));
             check("shear kinetic energy decay",
                   std::abs(manager.energy()/initialEnergy - amplitude*amplitude));

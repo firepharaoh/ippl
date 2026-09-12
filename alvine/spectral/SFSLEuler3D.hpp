@@ -8,7 +8,7 @@
     }
 
     void forwardEulerGridModes3D(ComplexField_t& modes) {
-        // Step 8: the forward FFT already includes 1/Ngrid. Remove the
+        // Step 4: the forward FFT already includes 1/Ngrid. Remove the
         // cell-center phase to recover the Fourier-series convention of q.
         this->spectralFft_mp->transform(ippl::FORWARD, modes);
         auto values = modes.getView();
@@ -43,7 +43,7 @@
             return;
         }
 
-        // Steps 5-6: differentiate velocity spectrally, then IFFT all nine
+        // Step 3: differentiate velocity spectrally, then IFFT all nine
         // derivatives and physical vorticity onto the same cell-center grid.
         // These derivative buffers are scratch until the next gradient build.
         this->computeSpectralVelocityGradientModes3D();
@@ -71,7 +71,7 @@
         const int ng = euler_sx_m.getNghost();
         const bool stretching = use_stretching_m;
 
-        // Step 7: the nonlinear product is evaluated on the grid. S is a
+        // Step 4: the nonlinear product is evaluated on the ORIGINAL grid. S is a
         // physical-vorticity RHS, without dt or particle-volume factors.
         Kokkos::parallel_for(
             "sfsl_euler_grid_stretching", ippl::getRangePolicy(sx, ng),
@@ -115,7 +115,7 @@
                 : activeMaximumTimestep3D();
         }
 
-        // Step 8: transform S back to Fourier space; it is never gathered.
+        // Step 4: retain S_hat^n across transport; it is never gathered or advected.
         if (use_stretching_m) {
             forwardEulerGridModes3D(euler_sx_m);
             forwardEulerGridModes3D(euler_sy_m);
@@ -138,8 +138,9 @@
         const T dt = T(this->dt_m);
         const T nu = T(this->viscosity_m);
 
-        // Steps 9-10: q = omega_hat/k^2, so the stretching increment is
-        // dt*S_hat/k^2. Backward-Euler diffusion acts on that UPDATED state.
+        // Step 7: q now contains the ADVECTION-ONLY scatter q_star, while
+        // S_hat^n still belongs to the original grid. Apply the IMEX formula
+        // q^(n+1) = (q_star + dt*S_hat^n/k^2)/(1 + nu*dt*k^2).
         // Keep the shared scatter/Biot-Savart zero/Nyquist convention.
         Kokkos::parallel_for(
             "sfsl_euler_spectral_source_split", ippl::getRangePolicy(qx, ng),
@@ -167,9 +168,9 @@
     }
 
     void sampleEulerLatticeFromGrid3D() {
-        // Steps 12-13: direct IFFT cell-center sampling, with no CIC or type-2
-        // NUFFT. Also give particles the UPDATED strengths before transport,
-        // so the next type-1 scatter retains the spectral source update.
+        // Direct IFFT cell-center sampling, with no CIC or type-2 NUFFT.
+        // Euler samples omega^n/u^n before transport and the completed state
+        // at reset. Other integrators also use this state-neutral helper.
         auto pc = this->pcontainer_m;
         auto R = pc->R.getView();
         auto omega = pc->omega.getView();
@@ -204,29 +205,38 @@
     }
 
     void advectSpectralEuler3D() {
-        // Steps 1-4: the preceding final scatter (or pre_run) prepared q^n
-        // and u^n. Retain the existing type-1 NUFFT for off-grid transport.
+        // Steps 1-2: retained spectral modes (or pre_run) supply q^n and u^n;
+        // no redundant FFT of the reconstructed input grid is necessary.
+        this->computeSpectralVelocityModes3D(false);
+        // Steps 3-4: freeze S_hat^n from omega^n and grad(u^n) on the lattice.
+        // LCFL chooses the one dt used for both transport and the IMEX update.
         computeEulerGridSource3D();
-        updateEulerSpectralVorticity3D();
-
-        // Step 11: use final source-updated vorticity in Biot-Savart. Its
-        // existing solenoidal projection is retained; no velocity-only decay.
-        this->computeSpectralVelocityModes3D();
-        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
-        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
         this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
         sampleEulerLatticeFromGrid3D();
 
-        // Step 14: Euler transport carries the source-updated strengths.
-        // Scatter before discarding virtual particles, then recreate the
-        // next cell-center lattice from the transported spectral state.
+        // Steps 5-6: X*=X+dt*u^n, carrying UNCHANGED Gamma^n=omega^n*dVp.
+        // Scatter only advection; do not filter/project before adding S_hat^n.
         pushVirtualParticlesForward3D();
         wrapParticlePositions3D(this->pcontainer_m->R);
         this->pcontainer_m->update();
         this->rebuildNUFFTPlans3D();
-        scatterAndSolveCurrentParticles3D();
+        this->spectralScatter3D(false);
+
+        // Step 7: add the saved original-grid stretching and implicit viscosity.
+        updateEulerSpectralVorticity3D();
+
+        // Step 8: recover final velocity, retaining configured end-step
+        // filtering and solenoidal projection. Never scatter stale particles
+        // after the IMEX update: the final spectral state is authoritative.
+        if (this->useShapeFunctionFilter()) this->applyShapeFunctionToSpectralVorticityModes3D();
+        this->applyConfiguredSpectralFilter3D(this->omega_x_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->omega_y_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->omega_z_hat_m);
+        this->computeSpectralVelocityModes3D();
+        this->applyConfiguredSpectralFilter3D(this->ux_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uy_hat_m);
+        this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         clearVirtualParticles3D();
         resetVirtualParticlesToGridFromSpectralModes3D();
     }

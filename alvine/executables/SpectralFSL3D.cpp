@@ -6,7 +6,8 @@
 //        [--diagnostics-freq frequency] [--adaptive-lcfl] [--lcfl value]
 //        [--integrator euler|leapfrog|rk4|strang] [--rk4-stage-trace]
 //        [--no-stretching] [--overallocate value] [--info level]
-// Euler uses the SFSL grid-stretching/implicit-diffusion split and direct IFFT
+// Euler transports the old state, then adds original-grid stretching and
+// implicit spectral diffusion, with direct IFFT
 // lattice sampling; it requires nx = ny = nz and np = nx * ny * nz.
 // RK4 uses D(dt/2) S(dt/2) A(dt) S(dt/2) D(dt/2), with spectral stretching
 // and particle advection integrated by RK4. This Strang composition is order 2.
@@ -168,9 +169,9 @@ int main(int argc, char* argv[]) {
             << " Time integrator: " << timeIntegrator
             << " RK4 stage trace: " << (rk4StageTrace ? "true" : "false") << endl;
         if (timeIntegrator == "euler") {
-            msg << " Euler pipeline: grid stretching -> spectral Euler source -> "
-                   "implicit vorticity diffusion -> IFFT lattice sampling -> "
-                   "particle transport -> type-1 NUFFT scatter." << endl;
+            msg << " Euler pipeline: save original-grid stretching -> IFFT old state -> "
+                   "Euler particle transport -> type-1 NUFFT scatter -> "
+                   "IMEX stretching/implicit diffusion -> IFFT lattice reset." << endl;
         } else if (timeIntegrator == "strang") {
             msg << " Strang pipeline: spectral diffusion half -> coupled particle RK4 "
                    "(advection + stretching) full -> spectral diffusion half -> "
