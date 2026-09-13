@@ -36,6 +36,28 @@ It uses one scatter/operator/gather pass instead of four RK4 stages. Operation
 ordering and timestep approximation differ from leapfrog/RK4, so numerical
 results are not expected to be bitwise equal across methods or MPI layouts.
 
+## IFFT Remeshing
+
+VIF3D remeshing (all integrators) reconstructs physical vorticity and velocity
+using IFFT, then samples their cell centers directly. Gamma=omega*dVp and all
+scalar/vector particle attributes are synchronized. The final Type-1 scatter
+is retained without another filter application. RHS gathers at off-grid
+particles are unchanged; only the six remesh Type-2 gathers are removed.
+
+When remeshing is enabled, nx=ny=nz and np=nx*ny*nz are required. A different
+particle lattice is rejected before initialization rather than approximated
+with nearest-cell interpolation. With remeshing disabled, different particle
+counts remain supported. Supporting different remesh lattices through IFFT
+would require a separate spectral resampling grid.
+
+The same reconstruction kernels handle phase and q-to-physical-vorticity
+conversion. Device grid views are read directly after particle migration;
+no host copies or new persistent device buffers are introduced. Replacing
+NUFFT evaluation with IFFT changes floating-point ordering and removes
+Type-2 approximation error at these lattice points, but does not guarantee
+conservation or stability of the full evolution. Existing filters, projection,
+particle lifecycle, and zero/Nyquist conventions are retained.
+
 ## Regression
 
 In the configured MPI/Kokkos/heFFTe build:
@@ -50,3 +72,5 @@ from the same old state, with nu=0 and nu=0.2, using 8^3 and 16^3 particles
 on an 8^3 grid. Scalar and vector strengths must remain synchronized after
 migration. A transverse shear tests the explicit amplitude (1-nu*dt)^steps,
 with and without remeshing. A clipped adaptive step checks consistent dt use.
+A t=0 IFFT remesh verifies analytic TGV velocity/vorticity and synchronized
+attributes, and a mismatched lattice must be rejected.
