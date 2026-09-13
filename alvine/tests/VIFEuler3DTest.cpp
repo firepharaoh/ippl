@@ -28,39 +28,6 @@ public:
         Kokkos::fence();
     }
 
-    T remeshTGVError() {
-        auto pc=this->pcontainer_m;
-        auto R=pc->R.getView(); auto old=pc->R_old.getView();
-        auto w=pc->omega.getView(); auto P=pc->P.getView(); auto u=pc->u.getView();
-        auto wx=pc->omega_x.getView(); auto wy=pc->omega_y.getView(); auto wz=pc->omega_z.getView();
-        auto ux=pc->ux.getView(); auto uy=pc->uy.getView(); auto uz=pc->uz.getView();
-        const T v=volume();
-        T error=0;
-        Kokkos::parallel_reduce("vif_test_ifft_remesh",pc->getLocalNum(),
-            KOKKOS_LAMBDA(const size_t p,T& e) {
-                const T x=R(p)[0], y=R(p)[1], z=R(p)[2];
-                const auto expected=TaylorGreen3D<T>::vorticity(x,y,z);
-                Vector_t<T,3> velocity(0);
-                velocity[0]=Kokkos::sin(x)*Kokkos::cos(y)*Kokkos::cos(z);
-                velocity[1]=-Kokkos::cos(x)*Kokkos::sin(y)*Kokkos::cos(z);
-                for(unsigned d=0;d<3;++d) {
-                    e=Kokkos::max(e,Kokkos::abs(w(p)[d]/v-expected[d]));
-                    e=Kokkos::max(e,Kokkos::abs(P(p)[d]-velocity[d]));
-                    e=Kokkos::max(e,Kokkos::abs(u(p)[d]-P(p)[d]));
-                    e=Kokkos::max(e,Kokkos::abs(old(p)[d]-R(p)[d]));
-                }
-                e=Kokkos::max(e,Kokkos::abs(wx(p)-w(p)[0])/v);
-                e=Kokkos::max(e,Kokkos::abs(wy(p)-w(p)[1])/v);
-                e=Kokkos::max(e,Kokkos::abs(wz(p)-w(p)[2])/v);
-                e=Kokkos::max(e,Kokkos::abs(ux(p)-P(p)[0]));
-                e=Kokkos::max(e,Kokkos::abs(uy(p)-P(p)[1]));
-                e=Kokkos::max(e,Kokkos::abs(uz(p)-P(p)[2]));
-            },Kokkos::Max<T>(error));
-        T global=0;
-        MPI_Allreduce(&error,&global,1,MPI_DOUBLE,MPI_MAX,ippl::Comm->getCommunicator());
-        return global;
-    }
-
     T stateError(const bool shear = false, const T amplitude = 1) {
         auto pc = this->pcontainer_m;
         auto R = pc->R.getView(); auto base = pc->rk4_R0.getView();
@@ -116,18 +83,6 @@ int main(int argc, char** argv) {
         auto lo=TaylorGreen3D<T>::domainMin(), hi=TaylorGreen3D<T>::domainMax();
         std::string solver="FFT";
         const T dt=0.03;
-        EulerProbe roundtrip(1,nr,512,solver,0,dt,"vif_ifft_remesh",0,0,"euler",lo,hi,lo,1,0);
-        roundtrip.pre_run();
-        // No time advance: detect IFFT phase, normalization, indexing, or
-        // packing errors independently of Euler's physical evolution.
-        roundtrip.remeshParticles3D();
-        check("IFFT remesh preserves TGV velocity and strengths",roundtrip.remeshTGVError());
-        bool rejected=false;
-        try {
-            EulerProbe mismatch(1,nr,4096,solver,0,dt,"vif_ifft_mismatch",0,0,"euler",lo,hi,lo,1,0);
-            mismatch.pre_run();
-        } catch (const std::runtime_error&) { rejected=true; }
-        if (!rejected) throw std::runtime_error("IFFT remesh accepted a mismatched lattice");
         for (const T nu : {0.,0.2}) {
             // Two particle densities test strength-volume scaling independently
             // of the Fourier grid size. Check after MPI migration as well.

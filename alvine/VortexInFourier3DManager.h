@@ -137,7 +137,6 @@ public:
     ~VortexInFourier3DManager() override {}
 
     void pre_run() override {
-        if (remesh_freq_m > 0) validateIfftRemeshLattice3D();
         for (unsigned d = 0; d < Dim; ++d) {
             this->domain_m[d] = ippl::Index(this->nr_m[d]);
         }
@@ -701,7 +700,6 @@ public:
     }
 
     void remeshParticles3D() {
-        validateIfftRemeshLattice3D();
         traceCudaCheckpoint3D("BEFORE REMESH");
         reconstructFieldsForRemeshing3D();
         traceCudaCheckpoint3D("AFTER REMESH RECONSTRUCT");
@@ -735,27 +733,13 @@ public:
         this->applyConfiguredSpectralFilter3D(this->uz_hat_m);
         traceCudaCheckpoint3D("REMESH RECONSTRUCT AFTER VELOCITY FILTER");
 
-        // Recover physical omega_hat=k^2*q and reconstruct cell-center fields.
-        // Remeshing uses direct IFFT samples, not off-grid Type-2 gathers.
-        this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
-        this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
-    }
-
-    void validateIfftRemeshLattice3D() const {
-        const auto n = particlesPerDirection3D();
-        if (static_cast<size_type>(n)*n*n != this->np_m
-            || n != static_cast<unsigned>(this->nr_m[0])
-            || n != static_cast<unsigned>(this->nr_m[1])
-            || n != static_cast<unsigned>(this->nr_m[2])) {
-            throw std::runtime_error(
-                "VIF3D IFFT remeshing requires nx=ny=nz and np=nx*ny*nz "
-                "(one particle per cell). Different lattices require spectral "
-                "resampling; disable remeshing or use matching sizes.");
-        }
+        // Remeshing samples these spectral modes directly with type-2 NUFFT.
+        // Keep the IFFT reconstruction path out of this diagnostic/remesh path.
+        // this->reconstructSpectralVorticity(this->fcontainer_m->getOmegaField());
+        // this->reconstructSpectralVelocity(this->fcontainer_m->getUField());
     }
 
     void remeshParticlesFromGrid3D() {
-        validateIfftRemeshLattice3D();
         auto* FL = &this->fcontainer_m->getFL();
         auto local = FL->getLocalNDIndex();
 
@@ -872,54 +856,146 @@ public:
         pc->update();
         traceCudaCheckpoint3D("REMESH AFTER PC UPDATE BEFORE NUFFT REBUILD");
         this->rebuildNUFFTPlans3D();
-        traceCudaCheckpoint3D("REMESH AFTER NUFFT REBUILD BEFORE IFFT SAMPLING");
+        traceCudaCheckpoint3D("REMESH AFTER NUFFT REBUILD BEFORE TYPE2");
 
-        sampleRemeshedParticlesFromIfftGrid3D(particle_volume);
-        traceCudaCheckpoint3D("REMESH AFTER IFFT SAMPLING BEFORE SCATTER");
+        sampleRemeshedParticlesFromSpectralModes3D(particle_volume);
+        traceCudaCheckpoint3D("REMESH AFTER TYPE2 SAMPLING BEFORE SCATTER");
 
         tracedSpectralScatter3D(false);
-        traceCudaCheckpoint3D("REMESH AFTER IFFT SAMPLING AFTER SCATTER");
+        traceCudaCheckpoint3D("REMESH AFTER TYPE2 SAMPLING AFTER SCATTER");
         // The remeshed particles were already sampled from filtered modes.
         // Applying a spectral filter again immediately after assigning them
         // compounds attenuation at every remesh event.
         this->computeSpectralVelocityModes3D();
-        traceCudaCheckpoint3D("REMESH AFTER IFFT SAMPLING AFTER BIOT SAVART");
+        traceCudaCheckpoint3D("REMESH AFTER TYPE2 SAMPLING AFTER BIOT SAVART");
     }
 
-    void sampleRemeshedParticlesFromIfftGrid3D(const double particle_volume) {
+    void sampleRemeshedParticlesFromSpectralModes3D(const double particle_volume) {
+        if (!this->nufftType2_mp) {
+            throw std::runtime_error(
+                "VIF 3D remeshing requires type-2 NUFFT to sample spectral modes.");
+        }
+
         auto pc = this->pcontainer_m;
-        auto R = pc->R.getView();
+
+        pc->omega_x = 0.0;
+        pc->omega_y = 0.0;
+        pc->omega_z = 0.0;
+        pc->ux = 0.0;
+        pc->uy = 0.0;
+        pc->uz = 0.0;
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER ZERO PARTICLE SCALARS");
+
+        auto oxModes = this->omega_x_hat_m.deepCopy();
+        auto oyModes = this->omega_y_hat_m.deepCopy();
+        auto ozModes = this->omega_z_hat_m.deepCopy();
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER COPY OMEGA MODES");
+
+        recoverFourierSeriesVorticityModesForSampling3D(oxModes, oyModes, ozModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER RECOVER OMEGA MODES");
+
+        this->nufftType2_mp->transform(pc->R, pc->omega_x, oxModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER OMEGA_X");
+        this->nufftType2_mp->transform(pc->R, pc->omega_y, oyModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER OMEGA_Y");
+        this->nufftType2_mp->transform(pc->R, pc->omega_z, ozModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER OMEGA_Z");
+
+        auto uxModes = this->ux_hat_m.deepCopy();
+        auto uyModes = this->uy_hat_m.deepCopy();
+        auto uzModes = this->uz_hat_m.deepCopy();
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER COPY VELOCITY MODES");
+
+        this->nufftType2_mp->transform(pc->R, pc->ux, uxModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER UX");
+        this->nufftType2_mp->transform(pc->R, pc->uy, uyModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER UY");
+        this->nufftType2_mp->transform(pc->R, pc->uz, uzModes);
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER UZ");
+
         auto omega = pc->omega.getView();
-        auto ox = pc->omega_x.getView(); auto oy = pc->omega_y.getView();
-        auto oz = pc->omega_z.getView();
-        auto P = pc->P.getView(); auto u = pc->u.getView();
-        auto ux = pc->ux.getView(); auto uy = pc->uy.getView(); auto uz = pc->uz.getView();
-        auto wg = this->fcontainer_m->getOmegaField().getView();
-        auto ug = this->fcontainer_m->getUField().getView();
-        const int ng = this->fcontainer_m->getOmegaField().getNghost();
-        const int un = this->fcontainer_m->getUField().getNghost();
-        const auto local = this->fcontainer_m->getFL().getLocalNDIndex();
-        const auto lower = this->rmin_m;
-        const auto dx = this->hr_m;
-        const T volume = T(particle_volume);
-        // Positions have migrated to their owning rank and are exact lattice
-        // centers. No interpolation, clamping, or ghost exchange is required.
-        Kokkos::parallel_for("sample_vif3d_remesh_ifft_grid", pc->getLocalNum(),
+        auto omegaX = pc->omega_x.getView();
+        auto omegaY = pc->omega_y.getView();
+        auto omegaZ = pc->omega_z.getView();
+        auto P = pc->P.getView();
+        auto u = pc->u.getView();
+        auto ux = pc->ux.getView();
+        auto uy = pc->uy.getView();
+        auto uz = pc->uz.getView();
+        const auto nlocal = pc->getLocalNum();
+        const T particleVolume = T(particle_volume);
+
+        Kokkos::parallel_for(
+            "pack_remeshed_vif_3d_type2_samples",
+            nlocal,
             KOKKOS_LAMBDA(const size_t p) {
-                const int i = int(Kokkos::floor((R(p)[0]-lower[0])/dx[0]))-local[0].first();
-                const int j = int(Kokkos::floor((R(p)[1]-lower[1])/dx[1]))-local[1].first();
-                const int k = int(Kokkos::floor((R(p)[2]-lower[2])/dx[2]))-local[2].first();
-                for (unsigned d=0; d<Dim; ++d) {
-                    omega(p)[d] = wg(i+ng,j+ng,k+ng)[d]*volume;
-                    P(p)[d] = ug(i+un,j+un,k+un)[d];
-                }
-                ox(p)=omega(p)[0]; oy(p)=omega(p)[1]; oz(p)=omega(p)[2];
-                u(p)=P(p);
-                ux(p)=P(p)[0]; uy(p)=P(p)[1]; uz(p)=P(p)[2];
+                omega(p)[0] = omegaX(p) * particleVolume;
+                omega(p)[1] = omegaY(p) * particleVolume;
+                omega(p)[2] = omegaZ(p) * particleVolume;
+                omegaX(p) = omega(p)[0];
+                omegaY(p) = omega(p)[1];
+                omegaZ(p) = omega(p)[2];
+
+                P(p)[0] = ux(p);
+                P(p)[1] = uy(p);
+                P(p)[2] = uz(p);
+                u(p) = P(p);
+            });
+        Kokkos::fence();
+        traceCudaCheckpoint3D("REMESH TYPE2 AFTER PACK SAMPLES");
+    }
+
+    void recoverFourierSeriesVorticityModesForSampling3D(ComplexField_t& oxModes,
+                                                         ComplexField_t& oyModes,
+                                                         ComplexField_t& ozModes) {
+        auto ox = oxModes.getView();
+        auto oy = oyModes.getView();
+        auto oz = ozModes.getView();
+
+        auto& layout = oxModes.getLayout();
+        const auto& lDom = layout.getLocalNDIndex();
+        const int nghost = oxModes.getNghost();
+
+        const int Nx = this->nr_m[0];
+        const int Ny = this->nr_m[1];
+        const int Nz = this->nr_m[2];
+
+        const T Lx = this->rmax_m[0] - this->rmin_m[0];
+        const T Ly = this->rmax_m[1] - this->rmin_m[1];
+        const T Lz = this->rmax_m[2] - this->rmin_m[2];
+        const T twoPi = T(2.0 * std::acos(-1.0));
+
+        using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
+        Kokkos::parallel_for(
+            "recover_vif_3d_type2_vorticity_modes",
+            policy_type({nghost, nghost, nghost},
+                        {static_cast<int>(ox.extent(0)) - nghost,
+                         static_cast<int>(ox.extent(1)) - nghost,
+                         static_cast<int>(ox.extent(2)) - nghost}),
+            KOKKOS_LAMBDA(const int i, const int j, const int k) {
+                const int gx = i - nghost + lDom[0].first();
+                const int gy = j - nghost + lDom[1].first();
+                const int gz = k - nghost + lDom[2].first();
+
+                const int mx = (gx <= Nx / 2) ? gx : gx - Nx;
+                const int my = (gy <= Ny / 2) ? gy : gy - Ny;
+                const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
+
+                const bool notMidX = (gx != Nx / 2);
+                const bool notMidY = (gy != Ny / 2);
+                const bool notMidZ = (gz != Nz / 2);
+
+                const T kx = notMidX * twoPi * mx / Lx;
+                const T ky = notMidY * twoPi * my / Ly;
+                const T kz = notMidZ * twoPi * mz / Lz;
+                const T k2 = kx * kx + ky * ky + kz * kz;
+
+                ox(i, j, k) *= k2;
+                oy(i, j, k) *= k2;
+                oz(i, j, k) *= k2;
             });
         Kokkos::fence();
     }
-
 
     bool shouldTracePipeline3D() const {
         return pipeline_trace_m
