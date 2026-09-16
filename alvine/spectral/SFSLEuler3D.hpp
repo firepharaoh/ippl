@@ -11,26 +11,60 @@
         // Step 4: the forward FFT already includes 1/Ngrid. Remove the
         // cell-center phase to recover the Fourier-series convention of q.
         this->spectralFft_mp->transform(ippl::FORWARD, modes);
-        auto values = modes.getView();
+        this->applyCellCenteredFftPhase3D(modes);
+    }
+
+    void scatterStretchingGridModes3D(ComplexField_t& modes) {
+        if (!this->nufftType1_mp) {
+            throw std::runtime_error("SFSL stretching requires an initialized type-1 NUFFT");
+        }
         const auto local = modes.getLayout().getLocalNDIndex();
-        const auto nr = this->nr_m;
+        const int nx = local[0].length(), ny = local[1].length();
+        const size_type count = size_type(nx) * ny * local[2].length();
+        stretching_sample_count_m = count;
+        stretching_positions_m.setParticleCount(stretching_sample_count_m);
+        stretching_values_m.setParticleCount(stretching_sample_count_m);
+        if (stretching_positions_m.size() != count) {
+            stretching_positions_m.resize(count);
+            stretching_values_m.resize(count);
+        }
+        auto positions = stretching_positions_m.getView();
+        auto values = stretching_values_m.getView();
+        auto grid = modes.getView();
+        const auto dx = this->hr_m;
         const int ng = modes.getNghost();
-        const T pi = T(std::acos(-1.0));
-        Kokkos::parallel_for(
-            "sfsl_euler_remove_cell_center_phase",
-            ippl::getRangePolicy(values, ng),
+        const T weight = T(1) / (T(this->nr_m[0]) * T(this->nr_m[1]) * T(this->nr_m[2]));
+        // Independent lattice samples, not the (possibly advected) particles.
+        // Coordinates are relative to the grid origin, matching the FFT basis.
+        // dV/V = 1/Ngrid: retain physical S_hat, with no k^2 or dt here.
+        Kokkos::parallel_for("sfsl_pack_stretching_type1", count,
+            KOKKOS_LAMBDA(const size_t p) {
+                const int i = p % nx;
+                const int j = (p / nx) % ny;
+                const int k = p / (size_type(nx) * ny);
+                positions(p)[0] = (local[0].first() + i + T(0.5)) * dx[0];
+                positions(p)[1] = (local[1].first() + j + T(0.5)) * dx[1];
+                positions(p)[2] = (local[2].first() + k + T(0.5)) * dx[2];
+                values(p) = grid(i+ng, j+ng, k+ng).real() * weight;
+            });
+        Kokkos::fence();
+        modes = Kokkos::complex<T>(0, 0);
+        // The native plan reads the scratch attributes' own local count.
+        // Cell-center positions supply the phase; do NOT apply FFT phase again.
+        this->nufftType1_mp->transform(stretching_positions_m, stretching_values_m, modes);
+        const auto nr = this->nr_m;
+        // Native NUFFT uses -N/2; the cell-centered FFT helper uses +N/2.
+        // On this fixed lattice those coefficients differ by -1 per Nyquist
+        // coordinate. Preserve the previous source convention, not a new filter.
+        auto spectral = modes.getView();
+        Kokkos::parallel_for("sfsl_stretching_nyquist_convention",
+            ippl::getRangePolicy(spectral, ng),
             KOKKOS_LAMBDA(const int i, const int j, const int k) {
-                const int indices[3] = {i - ng + local[0].first(),
-                                        j - ng + local[1].first(),
-                                        k - ng + local[2].first()};
-                T phase = 0;
-                for (unsigned d = 0; d < Dim; ++d) {
-                    const int m = indices[d] <= nr[d] / 2
-                                      ? indices[d] : indices[d] - nr[d];
-                    phase += pi * T(m) / T(nr[d]);
-                }
-                values(i, j, k) *= Kokkos::complex<T>(Kokkos::cos(phase),
-                                                      -Kokkos::sin(phase));
+                int sign = 1;
+                if (nr[0] % 2 == 0 && i-ng+local[0].first() == nr[0]/2) sign = -sign;
+                if (nr[1] % 2 == 0 && j-ng+local[1].first() == nr[1]/2) sign = -sign;
+                if (nr[2] % 2 == 0 && k-ng+local[2].first() == nr[2]/2) sign = -sign;
+                spectral(i,j,k) *= T(sign);
             });
         Kokkos::fence();
     }
@@ -117,9 +151,9 @@
 
         // Step 4: retain S_hat^n across transport; it is never gathered or advected.
         if (use_stretching_m) {
-            forwardEulerGridModes3D(euler_sx_m);
-            forwardEulerGridModes3D(euler_sy_m);
-            forwardEulerGridModes3D(euler_sz_m);
+            scatterStretchingGridModes3D(euler_sx_m);
+            scatterStretchingGridModes3D(euler_sy_m);
+            scatterStretchingGridModes3D(euler_sz_m);
         }
     }
 

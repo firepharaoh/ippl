@@ -34,6 +34,9 @@ private:
     bool rk4_stage_trace_m = false;
     bool rk4_stage_trace_initialized_m = false;
     ComplexField_t euler_sx_m, euler_sy_m, euler_sz_m;
+    size_type stretching_sample_count_m = 0;
+    ippl::ParticleAttrib<ippl::Vector<T, Dim>> stretching_positions_m;
+    ippl::ParticleAttrib<T> stretching_values_m;
     std::array<ComplexField_t, 3> strang_base_m, strang_sum_m;
 
 public:

@@ -6,6 +6,7 @@ const char* TestName = "SFSLEuler3DTest";
 #include "Ippl.h"
 #include "datatypes.h"
 #include "SpectralFSL3DManager.h"
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <iostream>
@@ -16,6 +17,93 @@ const char* TestName = "SFSLEuler3DTest";
 class EulerProbe : public SFSLProbe {
 public:
     using SFSLProbe::SFSLProbe;
+
+    double stretchingType1Error() {
+        auto fft = this->omega_x_hat_m.deepCopy();
+        auto nufft = this->omega_x_hat_m.deepCopy();
+        const auto local = fft.getLayout().getLocalNDIndex();
+        const int ng = fft.getNghost(), n = this->nr_m[0];
+        auto samples = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, fft.getView());
+        // Real broadband data, nonzero mean, and Nyquist content; unlike the
+        // initial TGV this exercises the entire represented spectrum.
+        for (int i=ng; i<int(samples.extent(0))-ng; ++i)
+        for (int j=ng; j<int(samples.extent(1))-ng; ++j)
+        for (int k=ng; k<int(samples.extent(2))-ng; ++k) {
+            const int gx=i-ng+local[0].first(), gy=j-ng+local[1].first(), gz=k-ng+local[2].first();
+            const int id = gx + n*(gy+n*gz);
+            samples(i,j,k) = Kokkos::complex<T>(T(0.3) + std::sin(T(id*id+3*id))
+                + ((gx+gy)%2 ? T(-0.2) : T(0.2)), 0);
+        }
+        Kokkos::deep_copy(fft.getView(), samples);
+        this->forwardEulerGridModes3D(fft);
+        auto expected = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, fft.getView());
+        double error = 0;
+        // Repeat to check buffer reuse and that output modes do not accumulate.
+        for (int repeat=0; repeat<2; ++repeat) {
+            Kokkos::deep_copy(nufft.getView(), samples);
+            this->scatterStretchingGridModes3D(nufft);
+            auto actual = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, nufft.getView());
+            for (int i=ng; i<int(samples.extent(0))-ng; ++i)
+            for (int j=ng; j<int(samples.extent(1))-ng; ++j)
+            for (int k=ng; k<int(samples.extent(2))-ng; ++k) {
+                const auto delta = actual(i,j,k) - expected(i,j,k);
+                error = std::max(error, std::hypot(delta.real(), delta.imag()));
+            }
+        }
+        double global = 0;
+        MPI_Allreduce(&error, &global, 1, MPI_DOUBLE, MPI_MAX, ippl::Comm->getCommunicator());
+        return global;
+    }
+
+    double cellCenteredFftError() {
+        auto modes = this->omega_x_hat_m.deepCopy();
+        const auto local = modes.getLayout().getLocalNDIndex();
+        const int ng = modes.getNghost(), n = this->nr_m[0];
+        const T pi = std::acos(T(-1));
+        double error = 0;
+        // Include zero, negative frequencies, and Nyquist planes/corners.
+        const int waves[][3] = {{0,0,0}, {1,-2,1}, {-1,1,-2},
+                                {n/2,1,-1}, {n/2,n/2,n/2}};
+        for (const auto& wave : waves) {
+            auto grid = Kokkos::create_mirror_view_and_copy(
+                Kokkos::HostSpace{}, modes.getView());
+            for (int i=ng; i<int(grid.extent(0))-ng; ++i)
+            for (int j=ng; j<int(grid.extent(1))-ng; ++j)
+            for (int k=ng; k<int(grid.extent(2))-ng; ++k) {
+                const T phase = 2*pi/n * (
+                    wave[0]*(i-ng+local[0].first()+T(0.5)) +
+                    wave[1]*(j-ng+local[1].first()+T(0.5)) +
+                    wave[2]*(k-ng+local[2].first()+T(0.5)));
+                grid(i,j,k) = Kokkos::complex<T>(std::cos(phase), std::sin(phase));
+            }
+            Kokkos::deep_copy(modes.getView(), grid);
+            this->forwardEulerGridModes3D(modes);
+            auto transformed = Kokkos::create_mirror_view_and_copy(
+                Kokkos::HostSpace{}, modes.getView());
+            for (int i=ng; i<int(grid.extent(0))-ng; ++i)
+            for (int j=ng; j<int(grid.extent(1))-ng; ++j)
+            for (int k=ng; k<int(grid.extent(2))-ng; ++k) {
+                const bool peak = i-ng+local[0].first() == (wave[0]+n)%n &&
+                                  j-ng+local[1].first() == (wave[1]+n)%n &&
+                                  k-ng+local[2].first() == (wave[2]+n)%n;
+                const auto delta = transformed(i,j,k) - Kokkos::complex<T>(peak ? 1 : 0, 0);
+                error = std::max(error, std::hypot(delta.real(), delta.imag()));
+            }
+            this->applyCellCenteredIfftPhase3D(modes);
+            this->spectralFft_mp->transform(ippl::BACKWARD, modes);
+            auto recovered = Kokkos::create_mirror_view_and_copy(
+                Kokkos::HostSpace{}, modes.getView());
+            for (int i=ng; i<int(grid.extent(0))-ng; ++i)
+            for (int j=ng; j<int(grid.extent(1))-ng; ++j)
+            for (int k=ng; k<int(grid.extent(2))-ng; ++k) {
+                const auto delta = recovered(i,j,k) - grid(i,j,k);
+                error = std::max(error, std::hypot(delta.real(), delta.imag()));
+            }
+        }
+        double global = 0;
+        MPI_Allreduce(&error, &global, 1, MPI_DOUBLE, MPI_MAX, ippl::Comm->getCommunicator());
+        return global;
+    }
 
     Modes directTGVStep() {
         // Independent DFT of analytically advected TGV strengths, plus the
@@ -85,6 +173,10 @@ int main(int argc, char** argv) {
             EulerProbe pipeline(1, nr, 512, solver, 0, dt, "sfsl_euler_order_test",
                                 0, nu, "euler", lower, upper, lower, 0);
             pipeline.pre_run();
+            check("broadband stretching type-1 versus phase-corrected FFT",
+                  pipeline.stretchingType1Error());
+            check("cell-centered FFT sign, normalization, and IFFT round-trip",
+                  pipeline.cellCenteredFftError(), 1e-12);
             auto expected = pipeline.directTGVStep();
             pipeline.run(1);
             check("advection first, original-grid stretching, then implicit diffusion",

@@ -6,7 +6,12 @@ The `--integrator euler` path follows the eight-step IMEX pipeline in
 uses the grid-only Strang adaptation described below.
 
 Stretching is evaluated using omega^n and grad(u^n) on the original IFFT grid
-and transformed back with FFT. These source modes are retained across
+and transformed back with type-1 NUFFT on independent cell-center samples.
+Each sample is weighted by `1/(nx*ny*nz)` (= cell volume / domain volume),
+so the result is physical `S_hat`, not `S_hat/k^2`. No extra FFT phase or
+shape filter is applied. The native NUFFT's negative Nyquist is converted
+to the previous FFT source's positive Nyquist convention by a sign per
+Nyquist coordinate on this fixed lattice. These source modes are retained across
 advection. For stored `q = omega_hat / k^2`, the final update is
 
 ```
@@ -29,8 +34,9 @@ flows or remove transport/filter/projection errors. Diffusion contracts
 each nonzero represented mode by `1 / (1 + nu * dt * k^2)`.
 
 Reordering source and transport changes floating-point results and finite-dt
-errors compared with the previous source-first pipeline. No extra device
-buffers or production host copies are needed; source buffers survive the
+errors compared with the previous source-first pipeline. Reusable device
+position and scalar buffers hold the local grid samples independently of
+advected particles; there are no production host copies. Source buffers survive the
 NUFFT scatter. FFT/NUFFT transfer and aliasing errors still limit accuracy;
 using Type-1 NUFFT does not inherently remove aliasing of sampled products.
 
@@ -40,6 +46,12 @@ gradient buffers are reused as IFFT scratch. FFTs and particle migration
 remain distributed. Adaptive LCFL transfers only a reduced scalar maximum
 to MPI. The new FFT/source operations change floating-point ordering, so
 bitwise agreement with old runs or across MPI layouts is not expected.
+The grid-based RK4 source stages share this type-1 source transform. The
+coupled particle RHS and the reconstruction IFFTs are unchanged. This adds
+NUFFT spreading/deconvolution cost compared with the grid FFT; it does not
+change the formal time-integration order or guarantee better conservation
+or stability. A broadband FFT/NUFFT comparison (including mean and Nyquist
+modes, repeated calls, and one/two MPI ranks) is part of `SFSLEuler3DTest`.
 
 ## Build and Run
 

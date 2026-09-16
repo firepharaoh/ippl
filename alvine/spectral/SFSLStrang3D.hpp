@@ -76,7 +76,7 @@
                     q(i,j,k) = sum(i,j,k) = Kokkos::complex<T>(0,0);
                     return;
                 }
-                // The grid FFT returns physical S_hat; dq/dt=S_hat/k^2.
+                // The grid-sample type-1 NUFFT returns physical S_hat; dq/dt=S_hat/k^2.
                 // Every temporary state is based on q_base, never cumulative.
                 const auto rhs = source(i,j,k) / k2;
                 sum(i,j,k) += weight * rhs;
@@ -101,7 +101,7 @@
         const T weights[4] = {T(1), T(2), T(2), T(1)};
         for (int stage = 0; stage < 4; ++stage) {
             // PDF block 2, SFSL adaptation: reconstruct this stage's velocity,
-            // IFFT omega and grad(u), multiply on the grid, and FFT S back.
+            // IFFT omega and grad(u), multiply on the grid, and type-1 NUFFT S back.
             // No particle RHS or stretching gather, no viscosity/filter here.
             this->computeSpectralVelocityModes3D(false);
             computeEulerGridSource3D(false);

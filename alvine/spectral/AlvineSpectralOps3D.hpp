@@ -680,6 +680,17 @@
     }
 
     void applyCellCenteredIfftPhase3D(ComplexField_t& modes) {
+        // Before IFFT: evaluate Fourier-series coefficients at cell centers.
+        applyCellCenteredPhase3D(modes, T(1));
+    }
+
+    void applyCellCenteredFftPhase3D(ComplexField_t& modes) {
+        // After normalized FFT: remove the half-cell sampling offset.
+        // This changes phase only, not FFT normalization or omega/k^2 storage.
+        applyCellCenteredPhase3D(modes, T(-1));
+    }
+
+    void applyCellCenteredPhase3D(ComplexField_t& modes, const T sign) {
         auto view = modes.getView();
 
         auto& layout = modes.getLayout();
@@ -694,7 +705,7 @@
 
         using policy_type = Kokkos::MDRangePolicy<Kokkos::Rank<3>>;
         Kokkos::parallel_for(
-            "apply_cell_centered_ifft_phase_3d",
+            "apply_cell_centered_phase_3d",
             policy_type({nghost, nghost, nghost},
                         {static_cast<int>(view.extent(0)) - nghost,
                          static_cast<int>(view.extent(1)) - nghost,
@@ -708,7 +719,9 @@
                 const int my = (gy <= Ny / 2) ? gy : gy - Ny;
                 const int mz = (gz <= Nz / 2) ? gz : gz - Nz;
 
-                const T phase = pi * (T(mx) / T(Nx) + T(my) / T(Ny) + T(mz) / T(Nz));
+                // Use the actual mode index, including Nyquist: derivative
+                // masking must not be used for this spatial translation.
+                const T phase = sign * pi * (T(mx) / T(Nx) + T(my) / T(Ny) + T(mz) / T(Nz));
                 const Kokkos::complex<T> factor(Kokkos::cos(phase), Kokkos::sin(phase));
 
                 view(i, j, k) *= factor;
