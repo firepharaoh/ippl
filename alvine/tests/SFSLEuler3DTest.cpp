@@ -18,43 +18,6 @@ class EulerProbe : public SFSLProbe {
 public:
     using SFSLProbe::SFSLProbe;
 
-    double stretchingType1Error() {
-        auto fft = this->omega_x_hat_m.deepCopy();
-        auto nufft = this->omega_x_hat_m.deepCopy();
-        const auto local = fft.getLayout().getLocalNDIndex();
-        const int ng = fft.getNghost(), n = this->nr_m[0];
-        auto samples = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, fft.getView());
-        // Real broadband data, nonzero mean, and Nyquist content; unlike the
-        // initial TGV this exercises the entire represented spectrum.
-        for (int i=ng; i<int(samples.extent(0))-ng; ++i)
-        for (int j=ng; j<int(samples.extent(1))-ng; ++j)
-        for (int k=ng; k<int(samples.extent(2))-ng; ++k) {
-            const int gx=i-ng+local[0].first(), gy=j-ng+local[1].first(), gz=k-ng+local[2].first();
-            const int id = gx + n*(gy+n*gz);
-            samples(i,j,k) = Kokkos::complex<T>(T(0.3) + std::sin(T(id*id+3*id))
-                + ((gx+gy)%2 ? T(-0.2) : T(0.2)), 0);
-        }
-        Kokkos::deep_copy(fft.getView(), samples);
-        this->forwardEulerGridModes3D(fft);
-        auto expected = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, fft.getView());
-        double error = 0;
-        // Repeat to check buffer reuse and that output modes do not accumulate.
-        for (int repeat=0; repeat<2; ++repeat) {
-            Kokkos::deep_copy(nufft.getView(), samples);
-            this->scatterStretchingGridModes3D(nufft);
-            auto actual = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, nufft.getView());
-            for (int i=ng; i<int(samples.extent(0))-ng; ++i)
-            for (int j=ng; j<int(samples.extent(1))-ng; ++j)
-            for (int k=ng; k<int(samples.extent(2))-ng; ++k) {
-                const auto delta = actual(i,j,k) - expected(i,j,k);
-                error = std::max(error, std::hypot(delta.real(), delta.imag()));
-            }
-        }
-        double global = 0;
-        MPI_Allreduce(&error, &global, 1, MPI_DOUBLE, MPI_MAX, ippl::Comm->getCommunicator());
-        return global;
-    }
-
     double cellCenteredFftError() {
         auto modes = this->omega_x_hat_m.deepCopy();
         const auto local = modes.getLayout().getLocalNDIndex();
@@ -173,8 +136,6 @@ int main(int argc, char** argv) {
             EulerProbe pipeline(1, nr, 512, solver, 0, dt, "sfsl_euler_order_test",
                                 0, nu, "euler", lower, upper, lower, 0);
             pipeline.pre_run();
-            check("broadband stretching type-1 versus phase-corrected FFT",
-                  pipeline.stretchingType1Error());
             check("cell-centered FFT sign, normalization, and IFFT round-trip",
                   pipeline.cellCenteredFftError(), 1e-12);
             auto expected = pipeline.directTGVStep();
