@@ -1737,6 +1737,17 @@ public:
         traceCudaCheckpoint3D("RK4 AFTER STORE OMEGA RHS");
     }
 
+    // Euler and every RK4 stage evaluate the same coupled particle ODE.
+    // Slopes contain derivatives, without a timestep factor. Diffusion is explicit.
+    void evaluateParticleTimeRHS3D(
+        typename ParticleContainer_t::particle_position_type& positionRHS,
+        typename ParticleContainer_t::particle_position_type& strengthRHS,
+        const bool diagnostics = false, const bool adaptTimestep = false) {
+        computeRK4ParticleRHS(diagnostics, adaptTimestep);
+        Kokkos::deep_copy(positionRHS.getView(), this->pcontainer_m->P.getView());
+        storeRK4OmegaRHS(strengthRHS);
+    }
+
     void setRK4StageState(typename ParticleContainer_t::particle_position_type& baseR,
                           typename ParticleContainer_t::particle_position_type& baseOmega,
                           typename ParticleContainer_t::particle_position_type& kR,
@@ -1827,21 +1838,16 @@ public:
         IpplTimings::startTimer(timer);
         // Step 1: preserve Y^n=(R^n,Gamma^n), where Gamma=omega*dVp.
         // Reuse registered RK storage so no new particle buffers are needed.
-        pc->rk4_R0 = pc->R;
-        pc->rk4_omega0 = pc->omega;
-        // Steps 2-5 are numbered inside this shared operator-evaluation helper.
-        // Its historical RK4 name does not imply multiple Euler evaluations.
-        computeRK4ParticleRHS(shouldLogDiagnostics3D(), true);
-
-        // Step 6: k_Gamma = grad(u^n)*Gamma^n + dVp*D^n.
-        // All RHS terms are evaluated BEFORE changing positions or strengths.
-        pc->rk4_k1 = pc->P;
-        storeRK4OmegaRHS(pc->rk4_omega_k1);
+        Kokkos::deep_copy(pc->rk4_R0.getView(), pc->R.getView());
+        Kokkos::deep_copy(pc->rk4_omega0.getView(), pc->omega.getView());
+        // Evaluate velocity, stretching and explicit diffusion at the old state.
+        evaluateParticleTimeRHS3D(pc->rk4_k1, pc->rk4_omega_k1,
+                                 shouldLogDiagnostics3D(), true);
 
         // Step 7: Gamma^(n+1)=Gamma^n+dt*k_Gamma (explicit viscosity).
         // Step 8: R^(n+1)=R^n+dt*u^n, NOT velocity from the updated vorticity.
         // The shared kernel performs both updates; scale=1 gives exactly dt.
-        pc->R_old = pc->rk4_R0;
+        Kokkos::deep_copy(pc->R_old.getView(), pc->rk4_R0.getView());
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0,
                         pc->rk4_k1, pc->rk4_omega_k1, T(1));
         wrapParticlePositions3D(pc->R);
@@ -1861,14 +1867,17 @@ public:
 
         std::shared_ptr<ParticleContainer_t> pc = this->pcontainer_m;
 
-        pc->rk4_R0 = pc->R;
-        pc->rk4_omega0 = pc->omega;
+        // ParticleAttrib copy assignment aliases its Kokkos storage. Preserve
+        // independent base states and slopes throughout all four stages.
+        Kokkos::deep_copy(pc->rk4_R0.getView(), pc->R.getView());
+        Kokkos::deep_copy(pc->rk4_omega0.getView(), pc->omega.getView());
+        // Remeshing changes the initial state, not the RK stage operator.
+        // Apply the configured RHS filters consistently at every stage.
+        skip_next_rhs_filter_after_remesh_m = false;
         traceCudaCheckpoint3D("RK4 AFTER STORE BASE STATE");
 
-        computeRK4ParticleRHS(shouldLogDiagnostics3D(), true);
-        pc->rk4_k1 = pc->P;
-        traceCudaCheckpoint3D("RK4 AFTER STORE K1 POSITION RHS");
-        storeRK4OmegaRHS(pc->rk4_omega_k1);
+        evaluateParticleTimeRHS3D(pc->rk4_k1, pc->rk4_omega_k1,
+                                 shouldLogDiagnostics3D(), true);
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k1, pc->rk4_omega_k1,
                          T(0.5));
@@ -1878,10 +1887,7 @@ public:
         IpplTimings::stopTimer(updateTimer);
         traceCudaCheckpoint3D("RK4 AFTER STAGE 2 UPDATE");
 
-        computeRK4ParticleRHS(false);
-        pc->rk4_k2 = pc->P;
-        traceCudaCheckpoint3D("RK4 AFTER STORE K2 POSITION RHS");
-        storeRK4OmegaRHS(pc->rk4_omega_k2);
+        evaluateParticleTimeRHS3D(pc->rk4_k2, pc->rk4_omega_k2);
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k2, pc->rk4_omega_k2,
                          T(0.5));
@@ -1891,10 +1897,7 @@ public:
         IpplTimings::stopTimer(updateTimer);
         traceCudaCheckpoint3D("RK4 AFTER STAGE 3 UPDATE");
 
-        computeRK4ParticleRHS(false);
-        pc->rk4_k3 = pc->P;
-        traceCudaCheckpoint3D("RK4 AFTER STORE K3 POSITION RHS");
-        storeRK4OmegaRHS(pc->rk4_omega_k3);
+        evaluateParticleTimeRHS3D(pc->rk4_k3, pc->rk4_omega_k3);
 
         setRK4StageState(pc->rk4_R0, pc->rk4_omega0, pc->rk4_k3, pc->rk4_omega_k3,
                          T(1.0));
@@ -1904,10 +1907,7 @@ public:
         IpplTimings::stopTimer(updateTimer);
         traceCudaCheckpoint3D("RK4 AFTER STAGE 4 UPDATE");
 
-        computeRK4ParticleRHS(false);
-        pc->rk4_k4 = pc->P;
-        traceCudaCheckpoint3D("RK4 AFTER STORE K4 POSITION RHS");
-        storeRK4OmegaRHS(pc->rk4_omega_k4);
+        evaluateParticleTimeRHS3D(pc->rk4_k4, pc->rk4_omega_k4);
 
         finalizeRK4State();
 

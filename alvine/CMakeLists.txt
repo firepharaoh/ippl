@@ -34,6 +34,9 @@ target_include_directories(SpectralFSL3D PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE
 target_link_libraries(SpectralFSL3D ${IPPL_LIBS} ippl MPI::MPI_CXX Heffte::Heffte)
 
 if(IPPL_ENABLE_TESTS)
+    add_executable(VIFRK4_3DTest tests/VIFRK4_3DTest.cpp)
+    target_include_directories(VIFRK4_3DTest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine)
+    target_link_libraries(VIFRK4_3DTest ${IPPL_LIBS} MPI::MPI_CXX Heffte::Heffte)
     add_executable(VIFEuler3DTest tests/VIFEuler3DTest.cpp)
     target_include_directories(VIFEuler3DTest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine)
     target_link_libraries(VIFEuler3DTest ${IPPL_LIBS} MPI::MPI_CXX Heffte::Heffte)
@@ -44,6 +47,11 @@ if(IPPL_ENABLE_TESTS)
     target_include_directories(SFSLEuler3DTest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/alvine)
     target_link_libraries(SFSLEuler3DTest ${IPPL_LIBS} MPI::MPI_CXX Heffte::Heffte)
     foreach(ranks IN ITEMS 1 2)
+        add_test(NAME vif_rk4_3d_${ranks}_ranks
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks}
+                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:VIFRK4_3DTest> ${MPIEXEC_POSTFLAGS})
+        set_tests_properties(vif_rk4_3d_${ranks}_ranks PROPERTIES
+            PROCESSORS ${ranks} TIMEOUT 600 LABELS "alvine;vif;rk4")
         add_test(NAME vif_euler_3d_${ranks}_ranks
             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks}
                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:VIFEuler3DTest> ${MPIEXEC_POSTFLAGS})
